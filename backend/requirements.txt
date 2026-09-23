@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic-settings
+transformers
+torch
+datasets
+soundfile
+librosa
+jiwer
+accelerate
+psutil
+huggingface_hub
+webdataset
+peft
+evaluate
+cryptography

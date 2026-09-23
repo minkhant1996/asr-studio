@@ -1,0 +1,32 @@
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
+    volumes:
+      - ./backend/data:/app/data
+      - hf-cache:/cache/huggingface
+    ports:
+      - "127.0.0.1:8767:8767"
+    restart: unless-stopped
+    # To train on an NVIDIA GPU: install the NVIDIA Container Toolkit, build with a CUDA torch
+    # wheel in backend/Dockerfile, and uncomment the block below.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "5175:80"
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
