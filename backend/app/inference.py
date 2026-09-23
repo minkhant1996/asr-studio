@@ -28,9 +28,18 @@ def resolve_target(target: dict[str, Any]) -> dict[str, Any]:
 
 
 @lru_cache(maxsize=2)
-def _load(path: str, base_path: str, adapter: bool, language: str):
+def _load(path: str, base_path: str, adapter: bool, language: str, family: str = "whisper"):
+    """Returns (runner, kind, device). kind is "seq2seq" (Whisper-like) or "pipeline" (RNNT etc.)."""
     import torch
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+    if family == "nemotron_rnnt":
+        # RNN-Transducer: no seq2seq class, but the ASR pipeline handles its decoding.
+        from transformers import pipeline
+
+        dev = 0 if sysinfo.device() == "cuda" else -1
+        pipe = pipeline("automatic-speech-recognition", model=path, device=dev, token=get_hf_token() or None)
+        return pipe, "pipeline", sysinfo.device()
 
     device = sysinfo.device()
     token = get_hf_token() or None
@@ -59,25 +68,37 @@ def _load(path: str, base_path: str, adapter: bool, language: str):
         except Exception:
             pass
     model.to(device).eval()
-    return model, processor, device
+    return (model, processor), "seq2seq", device
 
 
 def load_target(target: dict[str, Any]):
     t = resolve_target(target)
     spec = models_catalog.resolve(target.get("model") or "") if target.get("kind") != "run" else {}
+    if spec and not models_catalog.can_transcribe(spec):
+        raise RuntimeError(f"{spec['label']} cannot run here: {spec.get('note', '')}")
     from .training import _params_of
 
     params = _params_of({**spec, "id": target.get("model")}) if spec else 800e6
     device = sysinfo.device()
     if _load.cache_info().currsize == 0:   # nothing cached yet: this load really allocates
         guards.check(guards.model_need_mb(params, "inference", device), f"{t['label']} (transcription)", device)
+    family = spec.get("family", "whisper") if spec else "whisper"
     with _load_lock:
-        return _load(t["path"], t["base_path"], t["adapter"], t.get("language") or "burmese"), t
+        runner, kind, dev = _load(t["path"], t["base_path"], t["adapter"], t.get("language") or "burmese", family)
+    return (runner, kind, dev), t
 
 
-def _transcribe_sync(model, processor, device, arrays: list, language: str, max_new_tokens: int = 200) -> list[str]:
+def _transcribe_sync(runner, kind, device, arrays: list, language: str, max_new_tokens: int = 200) -> list[str]:
     import torch
 
+    if kind == "pipeline":
+        out = []
+        for arr in arrays:
+            r = runner({"raw": arr, "sampling_rate": 16000})
+            out.append((r["text"] if isinstance(r, dict) else str(r)).strip())
+        return out
+
+    model, processor = runner
     fe, tok = processor.feature_extractor, processor.tokenizer
     out: list[str] = []
     for arr in arrays:
@@ -95,6 +116,6 @@ def _transcribe_sync(model, processor, device, arrays: list, language: str, max_
 
 
 async def transcribe_arrays(target: dict[str, Any], arrays: list, language: str = "burmese") -> tuple[list[str], dict[str, Any]]:
-    (model, processor, device), t = await asyncio.to_thread(load_target, target)
-    texts = await asyncio.to_thread(_transcribe_sync, model, processor, device, arrays, language)
+    (runner, kind, device), t = await asyncio.to_thread(load_target, target)
+    texts = await asyncio.to_thread(_transcribe_sync, runner, kind, device, arrays, language)
     return texts, {**t, "device": device}

@@ -77,6 +77,10 @@ export interface ModelSpec {
   can_train: boolean
   fits_lora: boolean
   fits_full: boolean
+  languages: number | null
+  burmese: boolean | null
+  status: string
+  via: string
 }
 
 export interface RunSummary {

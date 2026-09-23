@@ -66,18 +66,31 @@ one record of `{audio, text, duration}`, so they mix freely.
 
 ## Models
 
-| Model | Params | Fine-tuning here | Rough memory |
-|---|---|---|---|
-| [Whisper large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo) | 809M | LoRA or full | ~8 GB VRAM (LoRA) |
-| [Whisper small](https://huggingface.co/openai/whisper-small) | 244M | LoRA or full | ~5 GB VRAM, or CPU |
-| [Whisper tiny](https://huggingface.co/openai/whisper-tiny) | 39M | LoRA or full | CPU-friendly |
-| [Qwen3-ASR 1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) | 1.7B | LoRA | ~14 GB VRAM |
-| [VibeVoice ASR Streaming 7B](https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-7B) | 7B | LoRA | ~24 GB VRAM |
-| [NVIDIA Nemotron 3.5 ASR streaming](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | 0.6B | **inference only** | ~3 GB |
+**Only Whisper actually knows Burmese.** That is the single most important fact when choosing a base
+model here, so the app shows it on every model card.
 
-Nemotron is an RNN-Transducer trained with NVIDIA NeMo; this app can transcribe and evaluate with it,
-but RNNT fine-tuning needs the NeMo toolkit, so the UI marks it inference-only rather than pretending
-otherwise. Any other Hugging Face speech-sequence-to-sequence model id also works.
+| Model | Params | Languages | Burmese? | Fine-tune here | VRAM (LoRA / full) |
+|---|---|---|---|---|---|
+| [Whisper large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo) | 809M | 112 | **yes** | LoRA or full | 2.9 / 6.8 GB |
+| [Whisper small](https://huggingface.co/openai/whisper-small) | 244M | 112 | **yes** | LoRA or full | 1.4 / 2.6 GB |
+| [Whisper tiny](https://huggingface.co/openai/whisper-tiny) | 39M | 112 | **yes** | LoRA or full | 0.9 / 1.1 GB |
+| [NVIDIA Nemotron 3.5 ASR streaming](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | 0.6B | 35 | no | inference only | 2.3 GB |
+| [Qwen3-ASR 1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) | 1.7B | 30 | no | not here | 5.2 GB |
+| [VibeVoice ASR Streaming 7B](https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-7B) | 7B | 10 | no | LoRA | 19 / 53 GB |
+
+On CPU the same models need roughly double those figures in RAM, because weights are float32 rather
+than float16. Any other Hugging Face speech-sequence-to-sequence model id also works.
+
+Caveats found by testing each one, rather than trusting the cards:
+
+- **Nemotron** is a cache-aware FastConformer RNN-Transducer. It loads and transcribes here through the
+  ASR pipeline (verified), but RNNT fine-tuning needs NVIDIA's NeMo toolkit, so it is transcription only.
+- **Qwen3-ASR** ships weight names (`thinker.*`) that transformers 5.x does not map, so loading it that
+  way silently produces a randomly initialised model. It needs Qwen's own `qwen-asr` package — and
+  installing that downgrades transformers to 4.x, which removes support for Nemotron and VibeVoice.
+  `requirements.txt` therefore pins `transformers>=5.17`, and the app refuses Qwen3-ASR with an
+  explanation rather than returning nonsense. Run it in a separate environment if you need it.
+- **VibeVoice** needs ~19 GB of VRAM just to load, so it could not be verified here.
 
 ## Memory safety
 

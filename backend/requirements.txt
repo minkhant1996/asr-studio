@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 pydantic-settings
-transformers
+transformers>=5.17          # 5.x adds qwen3_asr, vibevoice and nemotron3_5_asr; the qwen-asr package downgrades it and breaks them
 torch
 datasets
 soundfile

@@ -171,8 +171,12 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
 
         spec = models_catalog.resolve(cfg.model)
         if not models_catalog.supports_training(spec):
-            raise RuntimeError(f"{spec['label']} cannot be fine-tuned in this app ({spec.get('note', '')}). "
-                               "Use it for transcription and evaluation, or pick a Whisper / Qwen3-ASR model.")
+            raise RuntimeError(f"{spec['label']} cannot be fine-tuned in this app. {spec.get('note', '')} "
+                               "Pick a Whisper model, which supports Burmese and trains here.")
+        if cfg.language and spec.get("burmese") is False:
+            q.put({"type": "status", "message": f"note: {spec['label']} was not trained on Burmese "
+                                                f"({spec.get('languages')} languages, Burmese not among them), so it has no "
+                                                "Burmese tokens to build on and will need far more data than Whisper."})
 
         device = sysinfo.device()
         params = _params_of(spec)

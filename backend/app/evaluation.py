@@ -92,7 +92,7 @@ async def evaluate(dataset_id: str, targets: list[dict[str, Any]], *, split: str
         t = inference.resolve_target(target)
         yield {"type": "status", "message": f"loading {t['label']}", "target_index": ti, "label": t["label"]}
         try:
-            (model, processor, device), t = await asyncio.to_thread(inference.load_target, target)
+            (runner, kind, device), t = await asyncio.to_thread(inference.load_target, target)
         except Exception as e:
             yield {"type": "error", "message": f"{t['label']}: {e}"}
             return
@@ -105,7 +105,7 @@ async def evaluate(dataset_id: str, targets: list[dict[str, Any]], *, split: str
         for i, arr in enumerate(arrays):
             s0 = time.perf_counter()
             try:
-                txt = await asyncio.to_thread(inference._transcribe_sync, model, processor, device, [arr], language)
+                txt = await asyncio.to_thread(inference._transcribe_sync, runner, kind, device, [arr], language)
             except Exception as e:
                 yield {"type": "error", "message": f"{t['label']} failed on clip {i + 1}: {e}"}
                 return

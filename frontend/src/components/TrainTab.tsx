@@ -154,6 +154,11 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
                 <div className="small">{m.note}</div>
                 <div className="meta">
                   <span className="tag">{m.params}</span>
+                  {m.burmese === true ? (
+                    <span className="tag ok">knows Burmese</span>
+                  ) : m.burmese === false ? (
+                    <span className="tag warn">no Burmese ({m.languages} langs)</span>
+                  ) : null}
                   {m.can_train ? <span className="tag ok">fine-tunable</span> : <span className="tag warn">inference only</span>}
                   {hw?.device === 'cuda'
                     ? <span className={`tag ${m.fits_lora ? 'ok' : 'warn'}`}>LoRA ~{m.vram_lora_gb} GB VRAM</span>
@@ -198,7 +203,7 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
                 <button className="ghost" onClick={() => abortRef.current?.abort()}>Abort</button>
               </>
             )}
-            {!canTrain && spec && <span className="small" style={{ color: 'var(--bad)' }}>{spec.label} is inference only here. Use it in Evaluate and Transcribe.</span>}
+            {!canTrain && spec && <span className="small" style={{ color: 'var(--bad)' }}>{spec.label} is inference only here. {spec.note}</span>}
             {canTrain && est && (
               <span className="small" style={{ color: est.ok ? undefined : 'var(--bad)' }} title="Estimated working set: weights, plus gradients and optimiser state for a full fine-tune">
                 needs ~<b>{(est.need_mb / 1024).toFixed(1)} GB</b> of {est.device === 'cuda' ? 'VRAM' : 'RAM'} · {(est.free_mb / 1024).toFixed(1)} GB free
@@ -206,6 +211,12 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
               </span>
             )}
           </div>
+          {canTrain && spec?.burmese === false && (
+            <div className="small" style={{ color: '#ffb454' }}>
+              ⚠ {spec.label} was trained on {spec.languages} languages and Burmese is not one of them, so it has no Burmese
+              tokens to build on. A Whisper model will reach a usable error rate on far less data.
+            </div>
+          )}
           {error && <div className="error">{error}</div>}
         </section>
 
