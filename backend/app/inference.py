@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from . import models_catalog, sysinfo, training
+from . import guards, models_catalog, sysinfo, training
 from .config import get_hf_token
 
 _load_lock = threading.Lock()
@@ -64,6 +64,13 @@ def _load(path: str, base_path: str, adapter: bool, language: str):
 
 def load_target(target: dict[str, Any]):
     t = resolve_target(target)
+    spec = models_catalog.resolve(target.get("model") or "") if target.get("kind") != "run" else {}
+    from .training import _params_of
+
+    params = _params_of({**spec, "id": target.get("model")}) if spec else 800e6
+    device = sysinfo.device()
+    if _load.cache_info().currsize == 0:   # nothing cached yet: this load really allocates
+        guards.check(guards.model_need_mb(params, "inference", device), f"{t['label']} (transcription)", device)
     with _load_lock:
         return _load(t["path"], t["base_path"], t["adapter"], t.get("language") or "burmese"), t
 

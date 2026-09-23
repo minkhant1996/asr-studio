@@ -24,6 +24,7 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
   const [error, setError] = useState('')
   const [viewing, setViewing] = useState<RunSummary | null>(null)
   const [histOpen, setHistOpen] = useState(true)
+  const [est, setEst] = useState<{ need_mb: number; free_mb: number; ok: boolean; device?: string } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const { confirm, dialog } = useConfirm()
 
@@ -37,9 +38,12 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
     if (!datasetId && prepared.length) setDatasetId(prepared[0].id)
   }, [prepared, datasetId])
 
+  useEffect(() => {
+    api.estimate({ kind: 'train', model, method }).then(setEst).catch(() => setEst(null))
+  }, [model, method, busy])
+
   const spec = models.find((m) => m.id === model)
   const ds = prepared.find((p) => p.id === datasetId)
-  const fits = spec ? (method === 'lora' ? spec.fits_lora : spec.fits_full) : true
   const canTrain = !!spec?.can_train
   const stepsPerEpoch = ds ? Math.max(1, Math.floor(ds.train / Math.max(1, batch * accum))) : 0
   const ready = !!datasetId && canTrain
@@ -185,7 +189,7 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
             </span>
           </div>
           <div className="row">
-            <button className="primary" disabled={busy || !ready} onClick={run} title={!datasetId ? 'Pick a prepared dataset' : !canTrain ? `${spec?.label} cannot be fine-tuned here` : ''}>
+            <button className="primary" disabled={busy || !ready || (!!est && !est.ok)} onClick={run} title={!datasetId ? 'Pick a prepared dataset' : !canTrain ? `${spec?.label} cannot be fine-tuned here` : est && !est.ok ? 'Not enough memory for this combination' : ''}>
               {busy ? 'Training…' : 'Start fine-tuning'}
             </button>
             {busy && (
@@ -195,7 +199,12 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
               </>
             )}
             {!canTrain && spec && <span className="small" style={{ color: 'var(--bad)' }}>{spec.label} is inference only here. Use it in Evaluate and Transcribe.</span>}
-            {canTrain && !fits && <span className="small" style={{ color: '#ffb454' }}>⚠ This may not fit in memory on this machine.</span>}
+            {canTrain && est && (
+              <span className="small" style={{ color: est.ok ? undefined : 'var(--bad)' }} title="Estimated working set: weights, plus gradients and optimiser state for a full fine-tune">
+                needs ~<b>{(est.need_mb / 1024).toFixed(1)} GB</b> of {est.device === 'cuda' ? 'VRAM' : 'RAM'} · {(est.free_mb / 1024).toFixed(1)} GB free
+                {est.ok ? ' ✓' : ' — the backend will refuse this rather than run out of memory'}
+              </span>
+            )}
           </div>
           {error && <div className="error">{error}</div>}
         </section>

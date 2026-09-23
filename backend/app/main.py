@@ -9,7 +9,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import datasets_catalog as dc
-from . import evaluation, inference, models_catalog, prepare, secrets_store, sysinfo, training
+from . import evaluation, guards, inference, models_catalog, prepare, secrets_store, sysinfo, training
 from .config import get_hf_token, settings
 
 app = FastAPI(title="ASR Studio API")
@@ -38,7 +38,30 @@ async def health():
 
 @app.get("/api/system")
 async def system():
-    return await asyncio.to_thread(sysinfo.snapshot)
+    snap = await asyncio.to_thread(sysinfo.snapshot)
+    return {**snap, "guards": guards.summary()}
+
+
+@app.post("/api/estimate")
+async def estimate(body: dict[str, Any]):
+    """What a planned job would need, so the UI can warn before anything is loaded."""
+    kind = body.get("kind", "prepare")
+    device = sysinfo.device()
+    if kind == "prepare":
+        clips = int(body.get("clips") or 0)
+        need = 200 + prepare.SHARD_ROWS * 6 * guards.BYTES_PER_AUDIO_SECOND / 2**20
+        disk = guards.estimate_prepare_mb(clips)
+        return {"kind": kind, "need_mb": need, "disk_mb": disk, "free_mb": guards.free_mb(),
+                "ok": need + guards.RESERVE_MB < guards.free_mb(),
+                "note": f"Clips are written to disk every {prepare.SHARD_ROWS}, so memory stays flat; "
+                        f"{clips:,} clips need roughly {disk / 1024:.1f} GB of disk."}
+    spec = models_catalog.resolve(body.get("model") or models_catalog.DEFAULT_MODEL)
+    from .training import _params_of
+
+    need = guards.model_need_mb(_params_of(spec), body.get("method", "lora"), device)
+    free = guards.gpu_free_mb() if device == "cuda" else guards.free_mb()
+    return {"kind": kind, "need_mb": need, "free_mb": free, "device": device,
+            "ok": bool(free is not None and need + (0 if device == "cuda" else guards.RESERVE_MB) < free)}
 
 
 # ------------------------------------------------------------------ datasets
@@ -200,6 +223,14 @@ async def train_stream(req: TrainRequest):
         prepare.get_prepared(req.dataset_id)
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
+    spec = models_catalog.resolve(req.model)
+    from .training import _params_of
+
+    try:
+        guards.check(guards.model_need_mb(_params_of(spec), req.method, sysinfo.device()),
+                     f"{spec['label']} ({req.method} fine-tuning)", sysinfo.device())
+    except guards.NotEnoughMemory as e:
+        raise HTTPException(507, str(e))
     cfg = training.TrainConfig(**req.model_dump())
     return ndjson(training.train(cfg))
 
@@ -293,6 +324,8 @@ async def transcribe(file: UploadFile, target: str = "{}", language: str = "burm
     t0 = _t.perf_counter()
     try:
         texts, info = await inference.transcribe_arrays(tgt, chunks, language)
+    except guards.NotEnoughMemory as e:
+        raise HTTPException(507, str(e))
     except Exception as e:
         raise HTTPException(500, f"transcription failed: {e}")
     took = (_t.perf_counter() - t0) * 1000

@@ -60,6 +60,11 @@ export const api = {
   clipUrl: (id: string, split: string, index: number) => `/api/prepared/${id}/clip/${split}/${index}`,
 
   models: () => req<{ models: ModelSpec[]; device: string; gpu_gb: number; free_ram_gb: number }>('/models'),
+  estimate: (body: Record<string, unknown>) =>
+    req<{ kind: string; need_mb: number; free_mb: number; disk_mb?: number; ok: boolean; device?: string; note?: string }>('/estimate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   trainStream: (body: Record<string, unknown>, onEvent: (e: any) => void, signal?: AbortSignal) =>
     ndjson('/train/stream', body, onEvent, signal),
   runs: () => req<RunSummary[]>('/runs'),

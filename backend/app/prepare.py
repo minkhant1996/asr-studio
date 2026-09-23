@@ -15,10 +15,12 @@ from typing import Any, AsyncIterator
 import numpy as np
 
 from . import datasets_catalog as dc
+from . import guards
 from .config import settings
 
 CACHE = Path(settings.cache_dir)
 TARGET_SR = 16000
+SHARD_ROWS = 500          # flush to disk this often: memory stays flat no matter how many clips
 
 
 def _manifest_path(pid: str) -> Path:
@@ -122,7 +124,27 @@ async def prepare(sources: list[dict[str, Any]], *, name: str = "", min_seconds:
     out_dir = CACHE / pid
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    rows: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []          # current shard only
+    shards: list[str] = []
+    shard_dir = out_dir / "shards"
+    kept = 0
+    stats = {"seconds": 0.0, "chars": 0}
+    samples: list[dict[str, Any]] = []
+    low_memory = False
+
+    def _flush() -> None:
+        """Write the buffered rows as an Arrow shard and drop them from memory."""
+        nonlocal rows
+        if not rows:
+            return
+        from datasets import Dataset
+
+        shard_dir.mkdir(parents=True, exist_ok=True)
+        path = shard_dir / f"{len(shards):05d}"
+        Dataset.from_list(rows).save_to_disk(str(path))
+        shards.append(str(path))
+        rows = []
+
     per_source: list[dict[str, Any]] = []
     total_target = sum(int(s.get("take") or 0) for s in sources)
     t0 = time.perf_counter()
@@ -175,25 +197,46 @@ async def prepare(sources: list[dict[str, Any]], *, name: str = "", min_seconds:
             arr = await asyncio.to_thread(_resample, arr, sr)
             rows.append({"wav": _to_wav(arr), "sampling_rate": TARGET_SR, "text": text,
                          "duration": round(len(arr) / TARGET_SR, 3), "source": label})
+            kept += 1
             got += 1
             seconds += len(arr) / TARGET_SR
+            stats["seconds"] += len(arr) / TARGET_SR
+            stats["chars"] += len(text)
+            if len(samples) < 5:
+                samples.append({"text": text, "duration": round(len(arr) / TARGET_SR, 3), "source": label})
+            if len(rows) >= SHARD_ROWS:
+                await asyncio.to_thread(_flush)
+            if guards.critical():
+                await asyncio.to_thread(_flush)
+                if guards.critical():
+                    low_memory = True
+                    yield {"type": "status", "message": f"stopping early: only {guards.free_mb():.0f} MB of RAM left "
+                                                        f"({kept} clips kept and saved)"}
+                    break
             if got % 5 == 0 or got == take:
-                done = len(rows)
+                done = kept
                 el = time.perf_counter() - t0
                 yield {"type": "progress", "i": done, "n": total_target, "source": label, "source_index": si,
                        "clips": got, "seconds": round(seconds, 1), "elapsed": round(el, 1),
-                       "eta": round(el / max(done, 1) * max(total_target - done, 0), 1), "skipped": skipped}
+                       "eta": round(el / max(done, 1) * max(total_target - done, 0), 1), "skipped": skipped,
+                       "free_mb": round(guards.free_mb())}
         per_source.append({"label": label, "path": path, "split": split, "clips": got, "seconds": round(seconds, 1)})
+        if low_memory:
+            break
 
-    if not rows:
+    await asyncio.to_thread(_flush)
+    if not shards:
         yield {"type": "error", "message": "no usable clips found (check the split, or raise the duration limits)"}
         return
 
-    yield {"type": "status", "message": f"writing {len(rows)} clips to disk"}
-    from datasets import Dataset
+    yield {"type": "status", "message": f"assembling {kept} clips from {len(shards)} shard(s)"}
 
     def _build():
-        ds = Dataset.from_list(rows).shuffle(seed=seed)
+        from datasets import concatenate_datasets, load_from_disk
+
+        # Arrow shards are memory-mapped, so this concatenation does not load the audio into RAM.
+        parts_ds = [load_from_disk(sp) for sp in shards]
+        ds = (concatenate_datasets(parts_ds) if len(parts_ds) > 1 else parts_ds[0]).shuffle(seed=seed)
         if test_fraction > 0 and len(ds) >= 10:
             parts = ds.train_test_split(test_size=test_fraction, seed=seed)
         else:
@@ -201,19 +244,22 @@ async def prepare(sources: list[dict[str, Any]], *, name: str = "", min_seconds:
         from datasets import DatasetDict
 
         DatasetDict({"train": parts["train"], "test": parts["test"]}).save_to_disk(str(out_dir / "data"))
-        return len(parts["train"]), len(parts["test"])
+        n = len(parts["train"]), len(parts["test"])
+        del parts_ds, ds, parts
+        shutil.rmtree(shard_dir, ignore_errors=True)
+        return n
 
     n_train, n_test = await asyncio.to_thread(_build)
-    total_seconds = sum(r["duration"] for r in rows)
+    total_seconds = stats["seconds"]
     manifest = {
         "id": pid, "name": name or " + ".join(s["label"] for s in per_source),
-        "created": time.time(), "clips": len(rows), "train": n_train, "test": n_test,
+        "created": time.time(), "clips": kept, "train": n_train, "test": n_test, "low_memory_stop": low_memory,
         "seconds": round(total_seconds, 1), "hours": round(total_seconds / 3600, 3),
         "sampling_rate": TARGET_SR, "sources": per_source, "skipped": skipped,
         "min_seconds": min_seconds, "max_seconds": max_seconds,
-        "chars": int(sum(len(r["text"]) for r in rows)),
-        "avg_duration": round(total_seconds / len(rows), 2),
-        "samples": [{"text": r["text"], "duration": r["duration"], "source": r["source"]} for r in rows[:5]],
+        "chars": stats["chars"],
+        "avg_duration": round(total_seconds / kept, 2) if kept else 0,
+        "samples": samples,
     }
     _manifest_path(pid).write_text(json.dumps(manifest, ensure_ascii=False, indent=1))
     yield {"type": "done", "manifest": manifest}

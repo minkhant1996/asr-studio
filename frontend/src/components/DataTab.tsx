@@ -96,6 +96,7 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
   }
 
   const totalTake = mix.reduce((s, m) => s + (m.take || 0), 0)
+  const diskGb = (totalTake * 6 * 32 * 1024) / 2 ** 30   // PCM16 @16 kHz, ~6 s average clip
 
   return (
     <div>
@@ -189,6 +190,11 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
             {busy ? 'Preparing…' : 'Prepare dataset'}
           </button>
           {busy && <button className="ghost" onClick={() => abortRef.current?.abort()}>Stop</button>}
+          {totalTake > 0 && (
+            <span className="small" title="Clips are written to disk in shards, so memory stays flat however many you take">
+              ≈<b>{diskGb < 1 ? `${Math.round(diskGb * 1024)} MB` : `${diskGb.toFixed(1)} GB`}</b> on disk · memory stays flat
+            </span>
+          )}
         </div>
         {(busy || prog) && (
           <div style={{ marginTop: 10 }}>
@@ -207,7 +213,10 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
             <div className="progress">
               <div style={{ width: prog ? `${(prog.i / Math.max(prog.n, 1)) * 100}%` : '0%' }} />
             </div>
-            <div className="small">Clips are streamed, decoded, resampled to 16 kHz and stored locally. Nothing is downloaded in full.</div>
+            <div className="small">
+              Clips are streamed, decoded, resampled to 16 kHz and written to disk in batches, so memory stays flat however many you take.
+              {prog?.skipped ? ` ${prog.skipped} clip(s) skipped (empty transcript or outside the duration limits).` : ''}
+            </div>
           </div>
         )}
       </section>

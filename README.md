@@ -79,6 +79,31 @@ Nemotron is an RNN-Transducer trained with NVIDIA NeMo; this app can transcribe 
 but RNNT fine-tuning needs the NeMo toolkit, so the UI marks it inference-only rather than pretending
 otherwise. Any other Hugging Face speech-sequence-to-sequence model id also works.
 
+## Memory safety
+
+Running out of RAM cannot damage hardware, but it makes the machine swap or the process get killed
+mid-run. Three things prevent that:
+
+- **Preparation never accumulates.** Clips are written to disk in shards of 500 and the buffer is
+  dropped, so memory stays flat whether you take 100 clips or 100,000. Only disk grows: roughly
+  190 MB per 1,000 clips at 6 s average. The size is shown before you start.
+- **Loading is refused, not attempted.** Before a model loads, the backend estimates its working set
+  (weights, plus gradients and optimiser state for a full fine-tune) and compares it with free memory,
+  keeping 1.5 GB in reserve. If it will not fit, you get a clear message naming the number instead of
+  a frozen machine. The Fine-tune tab shows the estimate live and disables the button.
+- **Running jobs stop themselves.** Preparation and training check free memory as they go and stop
+  cleanly below 800 MB, keeping whatever was already produced.
+
+On a 64 GB machine with ~34 GB free, this is what the guards report:
+
+| Job | Needs | Verdict |
+|---|---|---|
+| Prepare 50,000 clips | 0.3 GB RAM, 9.2 GB disk | runs |
+| Whisper small, LoRA | 2.1 GB | runs |
+| Whisper small, full fine-tune | 4.4 GB | runs |
+| VibeVoice 7B, LoRA | 37 GB | refused |
+| VibeVoice 7B, full fine-tune | 105 GB | refused |
+
 ## Hardware
 
 - **A GPU is optional but strongly recommended for real training.** On CPU, a LoRA fine-tune of

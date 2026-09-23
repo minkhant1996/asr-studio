@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from . import models_catalog, prepare, sysinfo
+from . import guards, models_catalog, prepare, sysinfo
 from .config import get_hf_token, settings
 
 RUNS = Path(settings.runs_dir)
@@ -90,6 +90,24 @@ class TrainConfig:
     name: str = ""
 
 
+_PARAMS = {"whisper-tiny": 39e6, "whisper-small": 244e6, "whisper-large-v3-turbo": 809e6,
+           "qwen3-asr-1.7b": 1.7e9, "vibevoice-asr-streaming-7b": 7e9, "nemotron-3.5-asr-streaming-0.6b": 0.6e9}
+
+
+def _params_of(spec: dict[str, Any]) -> float:
+    if spec.get("id") in _PARAMS:
+        return _PARAMS[spec["id"]]
+    txt = str(spec.get("params", "")).strip().upper()
+    try:
+        if txt.endswith("B"):
+            return float(txt[:-1]) * 1e9
+        if txt.endswith("M"):
+            return float(txt[:-1]) * 1e6
+    except ValueError:
+        pass
+    return 800e6
+
+
 def _language_for(processor, language: str) -> str | None:
     try:
         tok = getattr(processor, "tokenizer", processor)
@@ -157,7 +175,12 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
                                "Use it for transcription and evaluation, or pick a Whisper / Qwen3-ASR model.")
 
         device = sysinfo.device()
-        q.put({"type": "status", "stage": "loading", "message": f"loading {spec['label']} on {device}"})
+        params = _params_of(spec)
+        need = guards.model_need_mb(params, cfg.method, device)
+        guards.check(need, f"{spec['label']} ({cfg.method} fine-tuning)", device)
+        q.put({"type": "status", "stage": "loading",
+               "message": f"loading {spec['label']} on {device} (needs ~{need / 1024:.1f} GB, "
+                          f"{guards.free_mb() / 1024:.1f} GB free)"})
         processor = _build_processor(spec["path"], cfg.language, cfg.task)
         dtype = torch.float16 if (cfg.fp16 and device == "cuda") else torch.float32
         model = AutoModelForSpeechSeq2Seq.from_pretrained(spec["path"], dtype=dtype, token=get_hf_token() or None)
@@ -232,6 +255,10 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
 
             def on_step_end(self, a, state, control, **kw):
                 if stop.is_set():
+                    control.should_training_stop = True
+                elif guards.critical():
+                    q.put({"type": "status", "message": f"stopping early: only {guards.free_mb():.0f} MB of RAM left. "
+                                                        "Lower the batch size or use a smaller model."})
                     control.should_training_stop = True
                 return control
 
