@@ -50,8 +50,10 @@ MODELS: dict[str, dict[str, Any]] = {
         "path": "nvidia/nemotron-3.5-asr-streaming-0.6b", "family": "nemotron_rnnt", "params": "0.6B", "via": "pipeline",
         "label": "NVIDIA Nemotron 3.5 ASR streaming 0.6B", "finetune": "no", "vram_full_gb": 8, "vram_lora_gb": 3, "ram_cpu_gb": 3,
         "languages": 35, "burmese": False, "status": "ok",
-        "note": "Cache-aware FastConformer RNN-Transducer, verified working here for transcription. Covers 35 language-locales "
-                "but not Burmese, and RNNT fine-tuning needs NVIDIA's NeMo toolkit, so it is transcription only.",
+        "note": "Cache-aware FastConformer RNN-Transducer, verified working here for transcription (35 language-locales, "
+                "not Burmese). Not fine-tunable here: its config sets no loss_type, so transformers silently substitutes "
+                "ForCausalLMLoss instead of the transducer loss, and its 13k vocabulary has no Burmese tokens. Training it "
+                "on Burmese means extending the vocabulary and using NVIDIA's NeMo toolkit for the real RNNT loss.",
         "url": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
     },
 }

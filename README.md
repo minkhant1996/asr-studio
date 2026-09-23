@@ -84,7 +84,12 @@ than float16. Any other Hugging Face speech-sequence-to-sequence model id also w
 Caveats found by testing each one, rather than trusting the cards:
 
 - **Nemotron** is a cache-aware FastConformer RNN-Transducer. It loads and transcribes here through the
-  ASR pipeline (verified), but RNNT fine-tuning needs NVIDIA's NeMo toolkit, so it is transcription only.
+  ASR pipeline (verified). It is *not* fine-tunable here, for three separate reasons found by testing:
+  its `forward` accepts `labels`, but the config sets no `loss_type`, so transformers silently falls back
+  to `ForCausalLMLoss` rather than the transducer loss the architecture needs; no RNNT loss kernel is
+  installed (that lives in `torchaudio`); and its 13,088-token vocabulary has no Burmese, so Burmese text
+  tokenizes to almost nothing. Fine-tuning it on Burmese means extending the vocabulary and training with
+  NVIDIA's NeMo toolkit, which is a different project from this one.
 - **Qwen3-ASR** ships weight names (`thinker.*`) that transformers 5.x does not map, so loading it that
   way silently produces a randomly initialised model. It needs Qwen's own `qwen-asr` package — and
   installing that downgrades transformers to 4.x, which removes support for Nemotron and VibeVoice.
