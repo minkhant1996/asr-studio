@@ -31,6 +31,13 @@ def ndjson(gen):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.on_event("startup")
+async def _startup() -> None:
+    n = training.sweep_stale_runs()
+    if n:
+        print(f"[asr-studio] marked {n} interrupted run(s) from a previous process")
+
+
 @app.get("/api/health")
 async def health():
     return {"ok": True, "device": sysinfo.device(), "hf_token_set": bool(get_hf_token())}

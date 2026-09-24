@@ -21,6 +21,19 @@ def run_dir(run_id: str) -> Path:
     return RUNS / run_id
 
 
+def sweep_stale_runs() -> int:
+    """A run marked 'running' cannot survive a backend restart: mark those interrupted on startup so
+    the history does not show a job that is no longer going anywhere."""
+    n = 0
+    for r in list_runs():
+        if r.get("status") == "running":
+            r["status"] = "interrupted"
+            r["message"] = "the backend restarted while this run was in progress"
+            save_run(r)
+            n += 1
+    return n
+
+
 def list_runs() -> list[dict[str, Any]]:
     out = []
     if not RUNS.exists():
