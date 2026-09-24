@@ -48,12 +48,12 @@ MODELS: dict[str, dict[str, Any]] = {
     },
     "nemotron-3.5-asr-streaming-0.6b": {
         "path": "nvidia/nemotron-3.5-asr-streaming-0.6b", "family": "nemotron_rnnt", "params": "0.6B", "via": "pipeline",
-        "label": "NVIDIA Nemotron 3.5 ASR streaming 0.6B", "finetune": "no", "vram_full_gb": 8, "vram_lora_gb": 3, "ram_cpu_gb": 3,
+        "label": "NVIDIA Nemotron 3.5 ASR streaming 0.6B", "finetune": "rnnt", "vram_full_gb": 8, "vram_lora_gb": 3, "ram_cpu_gb": 3,
         "languages": 35, "burmese": False, "status": "ok",
-        "note": "Cache-aware FastConformer RNN-Transducer, verified working here for transcription (35 language-locales, "
-                "not Burmese). Not fine-tunable here: its config sets no loss_type, so transformers silently substitutes "
-                "ForCausalLMLoss instead of the transducer loss, and its 13k vocabulary has no Burmese tokens. Training it "
-                "on Burmese means extending the vocabulary and using NVIDIA's NeMo toolkit for the real RNNT loss.",
+        "note": "Cache-aware FastConformer RNN-Transducer covering 35 language-locales, Burmese not among them. "
+                "Fine-tuning here uses torchaudio's transducer loss (transformers would otherwise substitute a causal-LM "
+                "loss), grows the 13k vocabulary with the script in your dataset, and trains the decoder and joint network. "
+                "Starting from no Burmese at all, it needs far more data than adapting Whisper does.",
         "url": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
     },
 }
@@ -79,4 +79,4 @@ def resolve(model_id: str) -> dict[str, Any]:
 
 
 def supports_training(spec: dict[str, Any]) -> bool:
-    return spec.get("finetune") in ("lora", "lora+full", "full")
+    return spec.get("finetune") in ("lora", "lora+full", "full", "rnnt")

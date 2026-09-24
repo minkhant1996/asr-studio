@@ -146,24 +146,44 @@ def _build_processor(path: str, language: str, task: str):
         return AutoProcessor.from_pretrained(path, **kw)
 
 
-def _map_dataset(ds, processor, language: str, task: str):
+def _map_dataset(ds, processor, language: str, task: str, max_labels: int = 448, on_truncate=None):
+    """Extract log-mel features and label ids.
+
+    Whisper's decoder is capped at 448 positions, and Burmese costs roughly 2.9 tokens per character
+    against about 0.3 for English, so a long clip can overflow that limit. Labels are truncated to fit
+    rather than failing the whole run.
+    """
     fe, tok = processor.feature_extractor, processor.tokenizer
     try:
         tok.set_prefix_tokens(language=language, task=task)
     except Exception:
         pass
+    truncated = {"n": 0}
 
     def _prep(batch):
         arr = prepare.to_array(batch)
         batch["input_features"] = fe(arr, sampling_rate=prepare.TARGET_SR).input_features[0]
-        batch["labels"] = tok(batch["text"]).input_ids
+        ids = tok(batch["text"]).input_ids
+        if len(ids) > max_labels:
+            truncated["n"] += 1
+            eos = tok.eos_token_id
+            ids = ids[: max_labels - 1] + ([eos] if eos is not None else [])
+        batch["labels"] = ids
         return batch
 
-    return ds.map(_prep, remove_columns=ds.column_names, desc="extracting features")
+    out = ds.map(_prep, remove_columns=ds.column_names, desc="extracting features")
+    if truncated["n"] and on_truncate:
+        on_truncate(truncated["n"], max_labels)
+    return out
 
 
 def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]", stop: threading.Event) -> None:
     """Runs in a worker thread and pushes progress dicts into `q`. Final push is a 'done' or 'error'."""
+    spec0 = models_catalog.resolve(cfg.model)
+    if spec0.get("family") == "nemotron_rnnt":
+        from .rnnt_training import train_rnnt
+
+        return train_rnnt(cfg, run_id, q, stop, run_dir, save_run)
     try:
         import torch
         from transformers import (AutoModelForSpeechSeq2Seq, Seq2SeqTrainer, Seq2SeqTrainingArguments,
@@ -213,8 +233,14 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
 
         q.put({"type": "status", "stage": "features", "message": "extracting log-mel features"})
         dsd = prepare.load_prepared(cfg.dataset_id)
-        train_ds = _map_dataset(dsd["train"], processor, cfg.language, cfg.task)
-        eval_ds = _map_dataset(dsd["test"], processor, cfg.language, cfg.task) if len(dsd["test"]) else None
+        max_labels = int(getattr(model.config, "max_target_positions", 448) or 448)
+
+        def _warn(n, limit):
+            q.put({"type": "status", "message": f"{n} transcript(s) longer than the model's {limit}-token limit were truncated "
+                                                "(Burmese costs ~2.9 tokens per character in Whisper's vocabulary)"})
+
+        train_ds = _map_dataset(dsd["train"], processor, cfg.language, cfg.task, max_labels, _warn)
+        eval_ds = _map_dataset(dsd["test"], processor, cfg.language, cfg.task, max_labels) if len(dsd["test"]) else None
 
         out = run_dir(run_id)
         out.mkdir(parents=True, exist_ok=True)

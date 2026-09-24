@@ -74,7 +74,7 @@ model here, so the app shows it on every model card.
 | [Whisper large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo) | 809M | 112 | **yes** | LoRA or full | 2.9 / 6.8 GB |
 | [Whisper small](https://huggingface.co/openai/whisper-small) | 244M | 112 | **yes** | LoRA or full | 1.4 / 2.6 GB |
 | [Whisper tiny](https://huggingface.co/openai/whisper-tiny) | 39M | 112 | **yes** | LoRA or full | 0.9 / 1.1 GB |
-| [NVIDIA Nemotron 3.5 ASR streaming](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | 0.6B | 35 | no | inference only | 2.3 GB |
+| [NVIDIA Nemotron 3.5 ASR streaming](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | 0.6B | 35 | no (added on the fly) | RNNT | 2.3 GB |
 | [Qwen3-ASR 1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) | 1.7B | 30 | no | not here | 5.2 GB |
 | [VibeVoice ASR Streaming 7B](https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-7B) | 7B | 10 | no | LoRA | 19 / 53 GB |
 
@@ -83,13 +83,20 @@ than float16. Any other Hugging Face speech-sequence-to-sequence model id also w
 
 Caveats found by testing each one, rather than trusting the cards:
 
-- **Nemotron** is a cache-aware FastConformer RNN-Transducer. It loads and transcribes here through the
-  ASR pipeline (verified). It is *not* fine-tunable here, for three separate reasons found by testing:
-  its `forward` accepts `labels`, but the config sets no `loss_type`, so transformers silently falls back
-  to `ForCausalLMLoss` rather than the transducer loss the architecture needs; no RNNT loss kernel is
-  installed (that lives in `torchaudio`); and its 13,088-token vocabulary has no Burmese, so Burmese text
-  tokenizes to almost nothing. Fine-tuning it on Burmese means extending the vocabulary and training with
-  NVIDIA's NeMo toolkit, which is a different project from this one.
+- **Nemotron** is a cache-aware FastConformer RNN-Transducer, and fine-tuning it needed three fixes that
+  `app/rnnt_training.py` now applies automatically:
+  - its config declares no `loss_type`, so transformers silently substitutes a causal-LM loss; the real
+    transducer loss comes from `torchaudio.functional.rnnt_loss`
+  - its processor emits a start-of-sequence id of 13088 while the decoder embedding has rows 0–13087, so
+    every forward pass crashed with an index error; growing the vocabulary makes that id valid
+  - its 13,088-token vocabulary contains no Myanmar script, so Burmese encoded to nothing. The trainer
+    collects the characters present in your dataset, adds them to the tokenizer, and grows the decoder
+    embedding and joint head to match, preserving the original rows. On the 400-clip set that is 58
+    characters, after which Burmese round-trips exactly.
+
+  It trains the decoder and joint network with the encoder frozen: 23.8M of 638M parameters. Because it
+  starts from no Burmese at all, expect it to need far more data than adapting Whisper, whose Burmese is
+  merely bad rather than absent.
 - **Qwen3-ASR** ships weight names (`thinker.*`) that transformers 5.x does not map, so loading it that
   way silently produces a randomly initialised model. It needs Qwen's own `qwen-asr` package — and
   installing that downgrades transformers to 4.x, which removes support for Nemotron and VibeVoice.
