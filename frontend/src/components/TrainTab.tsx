@@ -24,6 +24,9 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
   const [lastEval, setLastEval] = useState<any>(null)
   const [evalEvery, setEvalEvery] = useState(0)
   const [evalClips, setEvalClips] = useState(8)
+  const [language, setLanguage] = useState('')
+  const [earlyStop, setEarlyStop] = useState(true)
+  const [patience, setPatience] = useState(3)
   const [runId, setRunId] = useState('')
   const [error, setError] = useState('')
   const [viewing, setViewing] = useState<RunSummary | null>(null)
@@ -41,6 +44,12 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
   useEffect(() => {
     if (!datasetId && prepared.length) setDatasetId(prepared[0].id)
   }, [prepared, datasetId])
+  useEffect(() => {
+    const m = prepared.find((p) => p.id === datasetId)
+    const langs = m?.languages ?? []
+    if (langs.length === 1) setLanguage(langs[0].toLowerCase())
+    else if (langs.length > 1) setLanguage('')
+  }, [datasetId, prepared])
 
   useEffect(() => {
     api.estimate({ kind: 'train', model, method }).then(setEst).catch(() => setEst(null))
@@ -69,7 +78,9 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
       await api.trainStream(
         { dataset_id: datasetId, model, method, max_steps: maxSteps, batch_size: batch, grad_accum: accum,
           learning_rate: lr, warmup_steps: warmup, name, fp16: hw?.device === 'cuda',
-          eval_steps: evalEvery, eval_clips: evalClips },
+          language: language || 'burmese',
+          eval_steps: evalEvery, eval_clips: evalClips,
+          early_stopping: earlyStop, patience },
         (ev) => {
           if (ev.type === 'run') setRunId(ev.run.id)
           else if (ev.type === 'status') setStatus(ev.message)
@@ -150,6 +161,14 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
                 </option>
               ))}
             </select>
+            <label title="Which language Whisper is told to transcribe. Set automatically from the dataset.">language</label>
+            <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ width: 150 }}>
+              <option value="burmese">Burmese</option>
+              <option value="thai">Thai</option>
+              <option value="english">English</option>
+              <option value="chinese">Chinese</option>
+              <option value="">(multilingual)</option>
+            </select>
             {prepared.length === 0 && <span className="small">Prepare a dataset in the Data tab first.</span>}
           </div>
 
@@ -195,6 +214,16 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
             <input type="number" min={0} value={evalEvery} onChange={(e) => setEvalEvery(+e.target.value)} style={{ width: 80 }} />
             <label title="How many held-out clips each check transcribes. More is a steadier number but slower.">clips</label>
             <input type="number" min={1} max={64} value={evalClips} onChange={(e) => setEvalClips(+e.target.value)} style={{ width: 70 }} />
+            <label title="Stop when the held-out error rate stops improving, and export the best checkpoint rather than the last.">
+              <input type="checkbox" checked={earlyStop} onChange={(e) => setEarlyStop(e.target.checked)} style={{ width: 'auto', marginRight: 6 }} />
+              early stop
+            </label>
+            {earlyStop && (
+              <>
+                <label title="How many checks without improvement to tolerate before stopping.">patience</label>
+                <input type="number" min={1} max={20} value={patience} onChange={(e) => setPatience(+e.target.value)} style={{ width: 70 }} />
+              </>
+            )}
           </div>
           <div className="row">
             <label>run name</label>
@@ -244,6 +273,12 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
                   {live?.eta != null && <span>ETA <b>{live.eta}s</b></span>}
                   {live?.ram_mb != null && <span>RAM <b>{(live.ram_mb / 1024).toFixed(2)} GB</b></span>}
                   {live?.vram_mb != null && <span>VRAM <b>{(live.vram_mb / 1024).toFixed(2)} GB</b></span>}
+                  {lastEval?.best_cer != null && (
+                    <span title={`best held-out score so far, at step ${lastEval.best_step}`}>
+                      best <b style={{ color: 'var(--ok)' }}>{(lastEval.best_cer * 100).toFixed(1)}%</b>
+                      {lastEval.stale > 0 ? ` · ${lastEval.stale}/${lastEval.patience} checks without improvement` : ''}
+                    </span>
+                  )}
                   {lastEval && (
                     <span title={`scored on ${lastEval.n} held-out clips at step ${lastEval.step}`}>
                       held-out CER <b style={{ color: evals.length > 1 && lastEval.cer <= evals[0].cer ? 'var(--ok)' : undefined }}>

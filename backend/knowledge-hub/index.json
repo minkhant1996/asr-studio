@@ -1,0 +1,62 @@
+[
+ {
+  "file": "01-what-is-asr-finetuning.md",
+  "title": "What fine-tuning an ASR model actually means",
+  "summary": "A speech recognition model maps audio to text. The large open models — Whisper, Qwen3-ASR, NVIDIA's Nemotron — were trained on enormous multilingual corpora, so they already know how speech works in general. Fine-tuning ",
+  "chars": 1966
+ },
+ {
+  "file": "02-datasets.md",
+  "title": "Choosing and preparing data",
+  "summary": "A rough ladder, for adapting a model that already knows the language a little:",
+  "chars": 2394
+ },
+ {
+  "file": "03-models.md",
+  "title": "Picking a base model",
+  "summary": "Check the model card's language list. If your language is absent, expect to add vocabulary and to need a large corpus.",
+  "chars": 1779
+ },
+ {
+  "file": "04-lora-vs-full.md",
+  "title": "LoRA or full fine-tuning",
+  "summary": "The crossover is usually in the low thousands of clips. Below it, LoRA's inability to wreck the base model is a genuine advantage; above it, full fine-tuning's extra capacity starts to pay.",
+  "chars": 1809
+ },
+ {
+  "file": "05-hyperparameters.md",
+  "title": "Settings that actually change the outcome",
+  "summary": "The single most important number.",
+  "chars": 1555
+ },
+ {
+  "file": "06-metrics.md",
+  "title": "Measuring whether it worked",
+  "summary": "Both can exceed 100%, because insertions are unbounded. A model that emits a long repeated string against a short reference can score several hundred percent. That is a signal in itself: it usually means the model is pro",
+  "chars": 1852
+ },
+ {
+  "file": "07-dos-and-donts.md",
+  "title": "Do and don't",
+  "summary": "",
+  "chars": 1937
+ },
+ {
+  "file": "08-applications.md",
+  "title": "What people build with fine-tuned ASR",
+  "summary": "The direct use: turning recordings into text. Media archives, lecture capture, subtitle generation. Accuracy matters more than latency, so a large offline model like Whisper is the right shape.",
+  "chars": 1732
+ },
+ {
+  "file": "09-hardware.md",
+  "title": "Hardware, memory and time",
+  "summary": "CPU training works and is the right way to prove a pipeline, but it is slow: expect seconds per step where a GPU takes tens of milliseconds. Two reasons compound. There is no `fp16` on CPU, so everything runs in float32 ",
+  "chars": 1818
+ },
+ {
+  "file": "10-low-resource.md",
+  "title": "Working with a low-resource language",
+  "summary": "Most of the world's languages are poorly served by speech technology, not because the problem is hard but because nobody has assembled the data. If that is your situation, the work looks different.",
+  "chars": 2121
+ }
+]

@@ -1,13 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { DatasetSpec, Manifest, PreviewResult, Source } from '../types'
+import type { DatasetSourceInfo, DatasetSpec, Manifest, PreviewResult, Source } from '../types'
 import { useConfirm } from './ConfirmDialog'
 
 const fmt = (n: number) => n.toLocaleString()
+const sourceKey = (source: Source) => source.dataset_id ?? source.path ?? ''
+
+function sourceMax(source: Source, info?: DatasetSourceInfo): number | null {
+  if (!info) return null
+  const counts = new Map(info.splits.map((split) => [split.name, split.max_clips]))
+  if (source.split === 'both') {
+    const train = counts.get('train')
+    const test = counts.get('test')
+    return train != null && test != null ? train + test : null
+  }
+  return counts.get(source.split) ?? null
+}
+
+const quickPercents = [25, 60, 75, 100] as const
 
 export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: (m: Manifest) => void; prepared: Manifest[]; reload: () => void }) {
   const [specs, setSpecs] = useState<DatasetSpec[]>([])
   const [mix, setMix] = useState<Source[]>([])
+  const [sourceInfos, setSourceInfos] = useState<Record<string, DatasetSourceInfo>>({})
+  const [infoLoading, setInfoLoading] = useState<Record<string, boolean>>({})
   const [preview, setPreview] = useState<PreviewResult | null>(null)
   const [previewing, setPreviewing] = useState('')
   const [hfRef, setHfRef] = useState('')
@@ -36,13 +52,40 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
 
   const inMix = (id: string) => mix.some((m) => m.dataset_id === id)
 
+  async function loadSourceInfo(source: Source) {
+    const key = sourceKey(source)
+    if (sourceInfos[key] || infoLoading[key]) return
+    setInfoLoading((current) => ({ ...current, [key]: true }))
+    try {
+      const info = await api.datasetSourceInfo(source.dataset_id ? { dataset_id: source.dataset_id } : { path: source.path })
+      setSourceInfos((current) => ({ ...current, [key]: info }))
+      setMix((current) => current.map((item) => {
+        if (sourceKey(item) !== key) return item
+        const options = info.splits.map((entry) => entry.name)
+        const split = options.includes(item.split) ? item.split : options[0] ?? item.split
+        const next = { ...item, split }
+        const max = sourceMax(next, info)
+        return { ...next, take: max == null ? item.take : Math.min(item.take, max) }
+      }))
+    } catch {
+      // Preparation still works when Hugging Face does not publish split counts.
+    } finally {
+      setInfoLoading((current) => ({ ...current, [key]: false }))
+    }
+  }
+
   function toggle(spec: DatasetSpec) {
     if (!spec.transcripts) return
-    setMix((m) =>
-      inMix(spec.id)
-        ? m.filter((x) => x.dataset_id !== spec.id)
-        : [...m, { dataset_id: spec.id, split: spec.splits[0], take: 100, label: spec.name }],
-    )
+    if (!inMix(spec.id)) loadSourceInfo({ dataset_id: spec.id, split: spec.splits[0], take: 100 })
+    setMix((current) => current.some((item) => item.dataset_id === spec.id)
+      ? current.filter((item) => item.dataset_id !== spec.id)
+      : [...current, { dataset_id: spec.id, split: spec.splits[0], take: 100, label: spec.name }])
+  }
+
+  function addCustom() {
+    const source: Source = { path: hfRef.trim(), data_dir: hfDir || null, split: 'train', take: 100, label: hfRef.trim() }
+    setMix((current) => [...current, source])
+    loadSourceInfo(source)
   }
 
   async function doPreview(spec?: DatasetSpec) {
@@ -61,6 +104,10 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
   async function run() {
     if (!mix.length) {
       setError('Add at least one dataset to the mix.')
+      return
+    }
+    if (mix.some((source) => source.take < 1)) {
+      setError('Remove any source with zero available clips or choose another split.')
       return
     }
     setError('')
@@ -102,9 +149,14 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
     <div>
       {dialog}
       <section className="panel">
-        <h2>1 · Pick Burmese speech datasets</h2>
+        <h2>1 · Pick speech datasets</h2>
+        {[...new Set(specs.map((x) => x.language))].map((lang) => (
+        <div key={lang} style={{ marginBottom: 12 }}>
+        <div className="small" style={{ margin: '4px 0 6px', fontWeight: 600 }}>
+          {lang} · {specs.filter((x) => x.language === lang).length} datasets
+        </div>
         <div className="cards">
-          {specs.map((s) => (
+          {specs.filter((x) => x.language === lang).map((s) => (
             <div key={s.id} className={`card ${inMix(s.id) ? 'on' : ''}`} onClick={() => toggle(s)} title={s.transcripts ? 'Click to add to the mix' : 'Audio only: cannot be used for supervised training'}>
               <b>{s.name}</b>
               <div className="small">{s.description}</div>
@@ -114,6 +166,7 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
                 <span className="tag">{s.license}</span>
                 {s.transcripts ? <span className="tag ok">transcripts</span> : <span className="tag warn">audio only</span>}
                 {s.streaming_only && <span className="tag">streamed</span>}
+                {s.slow_stream && <span className="tag warn">slow: one request per clip</span>}
               </div>
               <div className="row" style={{ marginTop: 8 }}>
                 <button className="chip" onClick={(e) => { e.stopPropagation(); doPreview(s) }} disabled={!!previewing}>
@@ -126,6 +179,8 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
             </div>
           ))}
         </div>
+        </div>
+        ))}
         <div className="row">
           <label>or any Hugging Face dataset</label>
           <input value={hfRef} onChange={(e) => setHfRef(e.target.value)} placeholder="owner/name or a huggingface.co/datasets URL" style={{ flex: 1, minWidth: 220 }} />
@@ -136,7 +191,7 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
           <button
             className="ghost"
             disabled={!hfRef.trim()}
-            onClick={() => setMix((m) => [...m, { path: hfRef.trim(), data_dir: hfDir || null, split: 'train', take: 100, label: hfRef.trim() }])}
+            onClick={addCustom}
           >
             Add to mix
           </button>
@@ -162,21 +217,69 @@ export default function DataTab({ onPrepared, prepared, reload }: { onPrepared: 
       <section className="panel" style={{ marginTop: 16 }}>
         <h2>2 · Build a training set ({mix.length} source{mix.length === 1 ? '' : 's'}, {fmt(totalTake)} clips)</h2>
         {mix.length === 0 && <div className="small">Click a dataset above to add it. Mixing sources usually generalises better than one source alone.</div>}
-        {mix.map((m, i) => (
-          <div key={i} className="srcrow">
-            <span className="small">{m.label ?? m.dataset_id ?? m.path}</span>
-            <input value={m.split} onChange={(e) => setMix(mix.map((x, j) => (j === i ? { ...x, split: e.target.value } : x)))} title="split" />
-            <input
-              type="number"
-              min={1}
-              max={100000}
-              value={m.take}
-              onChange={(e) => setMix(mix.map((x, j) => (j === i ? { ...x, take: Math.max(1, +e.target.value || 1) } : x)))}
-              title="clips to take"
-            />
-            <button className="iconbtn" onClick={() => setMix(mix.filter((_, j) => j !== i))} title="remove">✕</button>
+        {mix.map((m, i) => {
+          const spec = specs.find((item) => item.id === m.dataset_id)
+          const key = sourceKey(m)
+          const info = sourceInfos[key]
+          const availableSplits = info?.splits.map((item) => item.name) ?? spec?.splits ?? [m.split]
+          const splitOptions = availableSplits.includes('train') && availableSplits.includes('test')
+            ? [...availableSplits, 'both'] : availableSplits
+          const max = sourceMax(m, info)
+          return (
+            <div key={i} className="srcrow">
+              <div className="src-label">
+                <span className="small">{m.label ?? m.dataset_id ?? m.path}</span>
+                <span className="small">
+                  {max != null ? `Max ${fmt(max)} clips` : infoLoading[key] ? 'Checking source limit…' : `Max unavailable${spec ? ` · catalog ${spec.clips}` : ''}`}
+                </span>
+              </div>
+              <label className="src-control">Source split
+                <select value={m.split} onChange={(e) => {
+                  const split = e.target.value
+                  setMix((current) => current.map((item, j) => {
+                    if (j !== i) return item
+                    const next = { ...item, split }
+                    const limit = sourceMax(next, info)
+                    return { ...next, take: limit == null ? item.take : Math.min(item.take, limit) }
+                  }))
+                }}>
+                  {splitOptions.map((split) => <option key={split} value={split}>{split === 'both' ? 'train + test' : split}</option>)}
+                </select>
+              </label>
+              <label className="src-control">Clips to take
+                <input
+                  type="number"
+                  min={max === 0 ? 0 : 1}
+                  max={max ?? undefined}
+                  value={m.take}
+                  onChange={(e) => {
+                    const requested = Math.max(1, Math.floor(Number(e.target.value) || 1))
+                    setMix((current) => current.map((item, j) => j === i
+                      ? { ...item, take: max == null ? requested : Math.min(requested, max) } : item))
+                  }}
+                />
+              </label>
+              <div className="src-percent" aria-label="Choose percentage of available clips">
+                {quickPercents.map((pct) => {
+                  const count = max == null ? null : max === 0 ? 0 : Math.max(1, Math.floor(max * pct / 100))
+                  return <button key={pct} className={`chip ${count != null && m.take === count ? 'on' : ''}`}
+                    disabled={count == null || count === 0} title={count == null ? 'Source limit unavailable' : `${fmt(count)} clips`}
+                    onClick={() => setMix((current) => current.map((item, j) => j === i ? { ...item, take: count! } : item))}>
+                    {pct}%
+                  </button>
+                })}
+              </div>
+              <button className="iconbtn" onClick={() => setMix((current) => current.filter((_, j) => j !== i))} title="remove">✕</button>
+            </div>
+          )
+        })}
+        {mix.length > 0 && <div className="small">Maximums count source rows before transcript and duration filters. Source split chooses input rows; the test split below holds out a share after mixing.</div>}
+        {new Set(mix.map((m) => specs.find((s) => s.id === m.dataset_id)?.language).filter(Boolean)).size > 1 && (
+          <div className="small" style={{ color: '#ffb454' }}>
+            ⚠ This mix spans more than one language. That is fine for a multilingual model, but a single-language
+            set usually reaches a lower error rate.
           </div>
-        ))}
+        )}
         <div className="row">
           <label>name</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="optional" style={{ width: 200 }} />

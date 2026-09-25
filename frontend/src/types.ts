@@ -1,4 +1,7 @@
 export interface DatasetSpec {
+  language: string
+  lang_code: string
+  slow_stream: boolean
   id: string
   name: string
   path: string
@@ -33,6 +36,10 @@ export interface PreviewResult {
   transcripts: boolean
 }
 
+export interface DatasetSourceInfo {
+  splits: { name: string; max_clips: number | null }[]
+}
+
 export interface Source {
   dataset_id?: string
   path?: string
@@ -53,7 +60,8 @@ export interface Manifest {
   seconds: number
   hours: number
   sampling_rate: number
-  sources: { label: string; path: string; split: string; clips: number; seconds: number }[]
+  sources: { label: string; path: string; split: string; clips: number; seconds: number; language?: string | null }[]
+  languages?: string[]
   skipped: number
   chars: number
   avg_duration: number

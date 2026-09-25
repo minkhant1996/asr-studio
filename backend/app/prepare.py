@@ -146,19 +146,30 @@ async def prepare(sources: list[dict[str, Any]], *, name: str = "", min_seconds:
         rows = []
 
     per_source: list[dict[str, Any]] = []
-    total_target = sum(int(s.get("take") or 0) for s in sources)
+    total_target = sum(max(0, int(s.get("take", 100))) for s in sources)
     t0 = time.perf_counter()
     skipped = 0
 
     for si, src in enumerate(sources):
         spec = dc.CATALOG.get(src.get("dataset_id") or "")
-        path = spec.path if spec else src["path"]
+        if spec:
+            path, config = spec.path, spec.config
+        else:
+            path, config = dc.parse_hf_ref(src["path"])
         label = spec.name if spec else path
-        take = int(src.get("take") or 100)
+        requested_take = max(0, int(src.get("take", 100)))
         split = src.get("split") or (spec.splits[0] if spec else "train")
+        info = await asyncio.to_thread(dc.source_info, path, config, tuple(spec.splits) if spec else ("train",))
+        valid_splits = dc.split_options(info)
+        if split not in valid_splits and not (split == "both" and {"train", "test"}.issubset(valid_splits)):
+            yield {"type": "error", "message": f"{label}: source split '{split}' is not available"}
+            return
+        available = dc.source_limit(info, split)
+        take = min(requested_take, available) if available is not None else requested_take
+        total_target -= requested_take - take
         text_field = src.get("text_field") or (spec.text_field if spec else None)
         data_dir = src.get("data_dir") or (spec.data_dir if spec else None)
-        config = src.get("config") or (spec.config if spec else None)
+        config = src.get("config") or config
 
         if spec and not spec.transcripts:
             yield {"type": "error", "message": f"{label} ships audio without transcripts, so it cannot be used for supervised training."}
@@ -206,6 +217,13 @@ async def prepare(sources: list[dict[str, Any]], *, name: str = "", min_seconds:
                 samples.append({"text": text, "duration": round(len(arr) / TARGET_SR, 3), "source": label})
             if len(rows) >= SHARD_ROWS:
                 await asyncio.to_thread(_flush)
+            if kept % 200 == 0 and guards.disk_critical(str(CACHE.parent)):
+                await asyncio.to_thread(_flush)
+                low_memory = True
+                yield {"type": "status", "message": f"stopping early: only "
+                                                    f"{guards.free_disk_mb(str(CACHE.parent)) / 1024:.1f} GB of disk left "
+                                                    f"({kept} clips kept and saved)"}
+                break
             if guards.critical():
                 await asyncio.to_thread(_flush)
                 if guards.critical():
@@ -219,8 +237,10 @@ async def prepare(sources: list[dict[str, Any]], *, name: str = "", min_seconds:
                 yield {"type": "progress", "i": done, "n": total_target, "source": label, "source_index": si,
                        "clips": got, "seconds": round(seconds, 1), "elapsed": round(el, 1),
                        "eta": round(el / max(done, 1) * max(total_target - done, 0), 1), "skipped": skipped,
-                       "free_mb": round(guards.free_mb())}
-        per_source.append({"label": label, "path": path, "split": split, "clips": got, "seconds": round(seconds, 1)})
+                       "free_mb": round(guards.free_mb()),
+                       "free_disk_mb": round(guards.free_disk_mb(str(CACHE.parent)))}
+        per_source.append({"label": label, "path": path, "split": split, "clips": got, "seconds": round(seconds, 1),
+                           "language": spec.language if spec else None})
         if low_memory:
             break
 
@@ -256,6 +276,7 @@ async def prepare(sources: list[dict[str, Any]], *, name: str = "", min_seconds:
         "created": time.time(), "clips": kept, "train": n_train, "test": n_test, "low_memory_stop": low_memory,
         "seconds": round(total_seconds, 1), "hours": round(total_seconds / 3600, 3),
         "sampling_rate": TARGET_SR, "sources": per_source, "skipped": skipped,
+        "languages": sorted({s.get("language") for s in per_source if s.get("language")}) or ["Burmese"],
         "min_seconds": min_seconds, "max_seconds": max_seconds,
         "chars": stats["chars"],
         "avg_duration": round(total_seconds / kept, 2) if kept else 0,

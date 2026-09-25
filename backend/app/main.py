@@ -9,7 +9,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import datasets_catalog as dc
-from . import evaluation, guards, inference, models_catalog, prepare, secrets_store, sysinfo, training
+from . import evaluation, guards, inference, knowledge, models_catalog, openrouter, prepare, secrets_store, sysinfo, training
 from .config import get_hf_token, settings
 
 app = FastAPI(title="ASR Studio API")
@@ -40,7 +40,8 @@ async def _startup() -> None:
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "device": sysinfo.device(), "hf_token_set": bool(get_hf_token())}
+    return {"ok": True, "device": sysinfo.device(), "hf_token_set": bool(get_hf_token()),
+            "openrouter_configured": bool(openrouter.get_key()), "openrouter_model": openrouter.get_model()}
 
 
 @app.get("/api/system")
@@ -75,6 +76,22 @@ async def estimate(body: dict[str, Any]):
 @app.get("/api/datasets")
 async def datasets():
     return dc.catalogue()
+
+
+@app.get("/api/datasets/source-info")
+async def dataset_source_info(dataset_id: str | None = None, path: str | None = None):
+    spec = dc.CATALOG.get(dataset_id or "")
+    if spec:
+        source_path, config, fallback = spec.path, spec.config, tuple(spec.splits)
+    elif path:
+        try:
+            source_path, config = dc.parse_hf_ref(path)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        fallback = ("train",)
+    else:
+        raise HTTPException(400, "dataset_id or path required")
+    return await asyncio.to_thread(dc.source_info, source_path, config, fallback)
 
 
 class PreviewRequest(BaseModel):
@@ -218,6 +235,9 @@ class TrainRequest(BaseModel):
     warmup_steps: int = Field(default=10, ge=0, le=5000)
     eval_steps: int = Field(default=0, ge=0, le=10000)
     eval_clips: int = Field(default=8, ge=1, le=64)
+    early_stopping: bool = True
+    patience: int = Field(default=3, ge=1, le=20)
+    min_delta: float = Field(default=0.002, ge=0, le=0.5)
     fp16: bool = True
     freeze_encoder: bool = False
     lora_r: int = Field(default=16, ge=1, le=256)
@@ -344,11 +364,86 @@ async def transcribe(file: UploadFile, target: str = "{}", language: str = "burm
             "model": info["label"], "device": info["device"], "filename": file.filename}
 
 
+# ------------------------------------------------------------------ learn
+class LearnRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    history: list[dict[str, str]] = []
+    language: str | None = Field(default=None, max_length=40, pattern=r"^[A-Za-z \-()']*$")
+
+
+@app.get("/api/learn/docs")
+async def learn_docs():
+    return knowledge.index()
+
+
+@app.get("/api/learn/docs/{name}")
+async def learn_doc(name: str):
+    try:
+        return {"file": name, "content": knowledge.read(name)}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/learn/ask")
+async def learn_ask(req: LearnRequest):
+    if not openrouter.get_key():
+        raise HTTPException(400, "add an OpenRouter key in Settings to use the Learn tab")
+    return ndjson(knowledge.ask(req.question, req.history, req.language))
+
+
+@app.get("/api/openrouter/models")
+async def openrouter_models(refresh: bool = False):
+    try:
+        return await openrouter.list_models(force=refresh)
+    except Exception as e:
+        raise HTTPException(502, f"could not list models: {e}")
+
+
+class ORKey(BaseModel):
+    api_key: str = Field(min_length=20, max_length=300, pattern=r"^[A-Za-z0-9_\-\.]+$")
+    model: str | None = Field(default=None, max_length=120)
+
+
+@app.put("/api/settings/openrouter")
+async def set_openrouter(body: ORKey):
+    """Verify the key with OpenRouter, then store it encrypted."""
+    try:
+        info = await openrouter.validate_key(body.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"could not reach OpenRouter: {e}")
+    secrets_store.set_secret("openrouter_api_key", body.api_key)
+    if body.model:
+        secrets_store.set_prefs(openrouter_model=body.model.strip())
+    return {"ok": True, "masked": secrets_store.mask(body.api_key), "label": info.get("label"),
+            "model": openrouter.get_model()}
+
+
+@app.delete("/api/settings/openrouter")
+async def delete_openrouter():
+    secrets_store.delete_secret("openrouter_api_key")
+    return {"ok": True}
+
+
+class PrefsBody(BaseModel):
+    openrouter_model: str | None = Field(default=None, max_length=120)
+
+
+@app.put("/api/settings/model")
+async def set_or_model(body: PrefsBody):
+    secrets_store.set_prefs(openrouter_model=body.openrouter_model)
+    return {"ok": True, "model": openrouter.get_model()}
+
+
 # ------------------------------------------------------------------ settings
 @app.get("/api/settings")
 async def get_settings():
     tok = get_hf_token()
+    ork = openrouter.get_key()
     return {"hf_token_set": bool(tok), "hf_token_masked": secrets_store.mask(tok) if tok else None,
+            "openrouter_key_set": bool(ork), "openrouter_key_masked": secrets_store.mask(ork) if ork else None,
+            "openrouter_model": openrouter.get_model(),
             "prefs": secrets_store.get_prefs(), "cache_dir": settings.cache_dir, "runs_dir": settings.runs_dir}
 
 

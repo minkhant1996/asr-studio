@@ -8,6 +8,11 @@ The three on-disk shapes are normalised to one record: {audio, text, duration}.
 import asyncio
 import io
 import re
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +37,9 @@ class DatasetSpec:
     text_field: str | None = None          # where the transcript lives (may be inside a json column)
     streaming_only: bool = False
     transcripts: bool = True               # False = audio only, cannot be used for supervised training
+    language: str = "Burmese"              # what Whisper should be told to transcribe
+    lang_code: str = "my"
+    slow_stream: bool = False              # one HTTP request per clip (audiofolder): fine for hundreds, not thousands
 
 
 CATALOG: dict[str, DatasetSpec] = {
@@ -44,7 +52,7 @@ CATALOG: dict[str, DatasetSpec] = {
         ),
         DatasetSpec(
             id="foeim_3hr", name="FOEIM Academy 3 h", path="freococo/3hr_myanmar_asr_raw_audio",
-            hours="~2.9", clips="3,200", license="MIT", text_field="transcript",
+            hours="~2.9", clips="3,200", license="MIT", text_field="transcript", slow_stream=True,
             description="Educational media, subtitle-aligned mp3 clips of 0.25–19 s, one consistent speaker.",
         ),
         DatasetSpec(
@@ -74,8 +82,129 @@ CATALOG: dict[str, DatasetSpec] = {
             hours="medium", clips="10K+", license="other (see card)", streaming_only=True, text_field="transcript",
             description="News voices with rich per-clip metadata (title, source video, duration).",
         ),
+        # ---------------------------------------------------------------- Thai
+        DatasetSpec(
+            id="porjai_central", name="Porjai Thai · Central", path="CMKL/Porjai-Thai-voice-dataset-central",
+            hours="large", clips="100K+", license="CC BY-SA 4.0", streaming_only=True, text_field="sentence",
+            language="Thai", lang_code="th",
+            description="CMKL's Porjai corpus, standard central Thai. The largest and most general of the set.",
+        ),
+        DatasetSpec(
+            id="porjai_korat", name="Porjai Thai · Korat (Isan)", path="CMKL/Porjai-Thai-voice-dataset-korat",
+            hours="medium", clips="10K+", license="CC BY-SA 4.0", streaming_only=True, text_field="sentence",
+            language="Thai", lang_code="th",
+            description="North-eastern (Korat/Isan) dialect. Carries both the dialect transcript and a standard Thai one.",
+        ),
+        DatasetSpec(
+            id="porjai_khummuang", name="Porjai Thai · Kham Mueang (Northern)", path="CMKL/Porjai-Thai-voice-dataset-khummuang",
+            hours="medium", clips="10K+", license="CC BY-NC-SA 4.0 (non-commercial)", streaming_only=True, text_field="sentence",
+            language="Thai", lang_code="th",
+            description="Northern Thai / Lanna dialect. Non-commercial licence.",
+        ),
+        DatasetSpec(
+            id="porjai_pattani", name="Porjai Thai · Pattani (Southern)", path="CMKL/Porjai-Thai-voice-dataset-pattani",
+            hours="medium", clips="10K+", license="CC BY-NC-SA 4.0 (non-commercial)", streaming_only=True, text_field="sentence",
+            language="Thai", lang_code="th",
+            description="Southern/Pattani Malay-influenced dialect. Non-commercial licence.",
+        ),
+        DatasetSpec(
+            id="thai_cv17", name="Thai Common Voice 17 (130k)", path="Porameht/processed-cv-17-th-130k",
+            hours="large", clips="130,000", license="CC0-1.0", streaming_only=True, text_field="sentence",
+            language="Thai", lang_code="th",
+            description="Cleaned Common Voice 17 Thai. Public domain and the best licensed starting point for Thai.",
+        ),
+        DatasetSpec(
+            id="thai_voice_169k", name="Thai voice 169k", path="Porameht/processed-voice-th-169k",
+            hours="large", clips="169,000", license="CC BY-SA 4.0", streaming_only=True, text_field="sentence",
+            language="Thai", lang_code="th",
+            description="Large mixed-source Thai speech corpus, cleaned and segmented.",
+        ),
+        DatasetSpec(
+            id="thai_smarthome", name="Thai smart-home commands", path="Porameht/processed-smarthome-th",
+            hours="small", clips="1K–10K", license="CC BY-SA 4.0", streaming_only=True, text_field="sentence",
+            language="Thai", lang_code="th",
+            description="Short spoken smart-home commands. Useful for command-and-control rather than general speech.",
+        ),
+        DatasetSpec(
+            id="thai_common_voice_edited", name="Thai Common Voice (edited)", path="lunarlist/edited_common_voice",
+            hours="medium", clips="10K+", license="MIT", streaming_only=True, text_field="text",
+            language="Thai", lang_code="th",
+            description="Re-segmented Common Voice Thai with per-clip durations.",
+        ),
+        DatasetSpec(
+            id="thai_som_tts", name="PyThaiNLP som TTS", path="pythainlp/som_tts_dataset",
+            hours="medium", clips="10K+", license="CC BY 4.0", streaming_only=True, text_field="text",
+            language="Thai", lang_code="th",
+            description="Single-speaker studio recordings built for TTS; clean audio that also trains ASR well.",
+        ),
+        DatasetSpec(
+            id="thaimos", name="Typhoon ThaiMOS TTS annotation", path="typhoon-ai/thaimos-tts-annotation",
+            hours="small", clips="1K–10K", license="see card", streaming_only=True, text_field="text",
+            language="Thai", lang_code="th",
+            description="Thai speech with MOS quality annotations. Small, and carries sound-quality labels.",
+        ),
     ]
 }
+
+
+@lru_cache(maxsize=128)
+def source_info(path: str, config: str | None = None,
+                fallback_splits: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Get real split names and row limits without downloading the dataset.
+
+    The viewer does not publish sizes for every dataset. In that case a limit is
+    unknown, rather than guessed from the catalogue's approximate clip label.
+    """
+    headers = {"Accept": "application/json"}
+    if get_hf_token():
+        headers["Authorization"] = f"Bearer {get_hf_token()}"
+
+    def query(endpoint: str) -> dict[str, Any]:
+        url = f"https://datasets-server.huggingface.co/{endpoint}?" + urllib.parse.urlencode({"dataset": path})
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return json.load(response)
+
+    rows: list[dict[str, Any]] = []
+    try:
+        rows = query("size").get("size", {}).get("splits", [])
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        pass
+    if not rows:
+        try:
+            rows = query("splits").get("splits", [])
+        except (urllib.error.URLError, TimeoutError, ValueError):
+            pass
+
+    if config:
+        rows = [r for r in rows if r.get("config") == config]
+    elif rows:
+        configs = {r.get("config") for r in rows}
+        chosen = "default" if "default" in configs else rows[0].get("config")
+        rows = [r for r in rows if r.get("config") == chosen]
+
+    splits: dict[str, int | None] = {}
+    for row in rows:
+        name = row.get("split")
+        if not isinstance(name, str) or not name:
+            continue
+        count = row.get("num_rows")
+        splits[name] = count if isinstance(count, int) and count >= 0 else None
+    if not splits:
+        splits = {name: None for name in fallback_splits or ("train",)}
+    return {"splits": [{"name": name, "max_clips": count} for name, count in splits.items()]}
+
+
+def source_limit(info: dict[str, Any], split: str) -> int | None:
+    counts = {item["name"]: item["max_clips"] for item in info["splits"]}
+    if split == "both":
+        train, test = counts.get("train"), counts.get("test")
+        return train + test if train is not None and test is not None else None
+    return counts.get(split)
+
+
+def split_options(info: dict[str, Any]) -> list[str]:
+    return [item["name"] for item in info["splits"]]
 
 
 def catalogue() -> list[dict[str, Any]]:
@@ -232,6 +361,12 @@ def _stream_sync(path: str, *, config: str | None, data_dir: str | None, split: 
 
 
 async def stream(path: str, *, config: str | None = None, data_dir: str | None = None, split: str = "train"):
+    if split == "both":
+        import itertools
+
+        train = await asyncio.to_thread(_stream_sync, path, config=config, data_dir=data_dir, split="train")
+        test = await asyncio.to_thread(_stream_sync, path, config=config, data_dir=data_dir, split="test")
+        return itertools.chain(train, test)
     return await asyncio.to_thread(_stream_sync, path, config=config, data_dir=data_dir, split=split)
 
 

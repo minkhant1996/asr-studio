@@ -70,3 +70,17 @@ def summary() -> dict[str, Any]:
     vm = psutil.virtual_memory()
     return {"free_mb": vm.available / 2**20, "total_mb": vm.total / 2**20,
             "reserve_mb": RESERVE_MB, "critical_mb": CRITICAL_MB, "gpu_free_mb": gpu_free_mb()}
+
+
+# ---------------------------------------------------------------- disk
+MIN_FREE_DISK_MB = 4000
+
+
+def free_disk_mb(path: str) -> float:
+    import shutil
+
+    return shutil.disk_usage(path).free / 2**20
+
+
+def disk_critical(path: str) -> bool:
+    return free_disk_mb(path) < MIN_FREE_DISK_MB

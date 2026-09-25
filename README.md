@@ -35,6 +35,8 @@ model* to *measured improvement* short enough to actually run.
   size and how many steps make one epoch over your data.
 - Live progress: a loss curve, step counter, elapsed time, ETA, and RAM/VRAM. Stop cleanly after the
   current step, or abort.
+- **Early stopping.** When the held-out error rate stops improving for a few checks the run ends, and
+  the exported model is the *best* checkpoint rather than the last one. Patience is configurable.
 - **Held-out metrics while it trains.** Every few steps the run transcribes clips it has never seen and
   scores them, so you watch character and word error rate move rather than guessing from the loss. It
   gets its own chart, and the latest reference and model output are shown side by side. The interval is
@@ -48,6 +50,14 @@ model* to *measured improvement* short enough to actually run.
 - Live per-clip progress with running CER/WER, then a comparison table with CER, WER, latency per clip
   and real-time factor, plus every reference and hypothesis side by side.
 - Saved to a history you can reopen.
+
+**Learn** — a handbook with an assistant on top
+- Ten pages written for this app: what fine-tuning is and is not, choosing data, picking a base model,
+  LoRA against full fine-tuning, the settings that matter, WER and CER, do and don't, applications,
+  hardware and memory, and working with a low-resource language.
+- Ask questions in any language and get answers in yours, drawn only from those pages and cited. The
+  assistant picks up to three relevant pages, reads them, and answers; it cannot use anything else.
+- Needs an OpenRouter key in Settings. Everything else in the app runs locally without one.
 
 **4 · Transcribe**
 - Drag an audio file onto the drop zone, or click to browse, and transcribe it with a base model or one

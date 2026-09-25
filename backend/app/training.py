@@ -94,6 +94,9 @@ class TrainConfig:
     warmup_steps: int = 10
     eval_steps: int = 0            # run a held-out CER/WER check every N steps (0 = off)
     eval_clips: int = 8            # how many held-out clips each check transcribes
+    early_stopping: bool = True    # stop when the held-out error rate stops improving
+    patience: int = 3              # how many checks without improvement to tolerate
+    min_delta: float = 0.002       # an improvement smaller than this does not count
     save_steps: int = 0
     fp16: bool = True
     freeze_encoder: bool = False
@@ -318,6 +321,22 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
             q.put({"type": "status", "message": f"held-out check every {eval_every} steps on {len(eval_rows)} clips "
                                                 "(character error rate is the one to watch for Burmese)"})
 
+        best = {"cer": float("inf"), "step": 0, "stale": 0, "saved": False}
+
+        def _save_best(step: int) -> None:
+            """Keep the checkpoint that scored best on held-out clips, not merely the last one."""
+            try:
+                bd = out / "best"
+                bd.mkdir(parents=True, exist_ok=True)
+                trainer_ref["t"].save_model(str(bd))
+                processor.save_pretrained(str(bd))
+                (bd / "best.json").write_text(json.dumps({"step": step, "cer": best["cer"]}))
+                best["saved"] = True
+            except Exception as e:
+                q.put({"type": "status", "message": f"could not save the best checkpoint: {e}"})
+
+        trainer_ref: dict[str, Any] = {}
+
         class _Cb(TrainerCallback):
             def on_log(self, a, state, control, logs=None, **kw):
                 if not logs:
@@ -339,7 +358,20 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
                     try:
                         e0 = time.perf_counter()
                         r = _quick_eval(model, processor, eval_rows, cfg.language)
-                        q.put({"type": "eval", "step": step, **r, "seconds": round(time.perf_counter() - e0, 1)})
+                        improved = r["cer"] < best["cer"] - cfg.min_delta
+                        if improved:
+                            best.update(cer=r["cer"], step=step, stale=0)
+                            _save_best(step)
+                        else:
+                            best["stale"] += 1
+                        q.put({"type": "eval", "step": step, **r, "seconds": round(time.perf_counter() - e0, 1),
+                               "best_cer": best["cer"], "best_step": best["step"], "improved": improved,
+                               "stale": best["stale"], "patience": cfg.patience})
+                        if cfg.early_stopping and best["stale"] >= cfg.patience:
+                            q.put({"type": "status", "message": f"early stop: held-out CER has not improved for "
+                                                                f"{best['stale']} checks; best was {best['cer'] * 100:.2f}% "
+                                                                f"at step {best['step']}"})
+                            control.should_training_stop = True
                     except Exception as ex:
                         q.put({"type": "status", "message": f"held-out check failed at step {step}: {ex}"})
                 if stop.is_set():
@@ -352,6 +384,7 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
 
         trainer = Seq2SeqTrainer(model=model, args=args, train_dataset=train_ds, eval_dataset=eval_ds,
                                  data_collator=_Collator(processor), callbacks=[_Cb()])
+        trainer_ref["t"] = trainer
         q.put({"type": "start", "max_steps": max_steps, "train_clips": len(train_ds),
                "eval_clips": len(eval_ds) if eval_ds is not None else 0, "device": device,
                "steps_per_epoch": steps_per_epoch})
@@ -361,9 +394,22 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
         model_dir = out / "model"
         trainer.save_model(str(model_dir))
         processor.save_pretrained(str(model_dir))
+        # the exported model is the best-scoring checkpoint when there is one
+        used_best = False
+        if best["saved"] and best["cer"] < float("inf"):
+            try:
+                import shutil
+
+                shutil.rmtree(model_dir, ignore_errors=True)
+                shutil.copytree(out / "best", model_dir)
+                used_best = True
+            except Exception as e:
+                q.put({"type": "status", "message": f"keeping the final checkpoint ({e})"})
         q.put({"type": "done", "train_runtime": round(result.metrics.get("train_runtime", 0), 1),
                "train_loss": result.metrics.get("train_loss"), "steps": int(result.metrics.get("step", max_steps)),
-               "model_dir": str(model_dir), "stopped_early": stop.is_set()})
+               "model_dir": str(model_dir), "stopped_early": stop.is_set(),
+               "best_cer": None if best["cer"] == float("inf") else best["cer"], "best_step": best["step"],
+               "exported": "best checkpoint" if used_best else "final checkpoint"})
     except Exception as e:  # surfaced to the UI
         import traceback
 
@@ -374,6 +420,9 @@ async def train(cfg: TrainConfig) -> AsyncIterator[dict[str, Any]]:
     run_id = uuid.uuid4().hex[:12]
     spec = models_catalog.resolve(cfg.model)
     ds_manifest = prepare.get_prepared(cfg.dataset_id)
+    langs = ds_manifest.get("languages") or []
+    if len(langs) == 1 and cfg.language in ("", "auto", None):
+        cfg.language = langs[0].lower()
     run: dict[str, Any] = {
         "id": run_id, "created": time.time(), "status": "running", "name": cfg.name or f"{spec['label']} · {ds_manifest['name']}",
         "model": cfg.model, "model_label": spec["label"], "dataset_id": cfg.dataset_id, "dataset_name": ds_manifest["name"],
