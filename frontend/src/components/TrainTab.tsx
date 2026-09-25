@@ -20,6 +20,10 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
   const [status, setStatus] = useState('')
   const [live, setLive] = useState<any>(null)
   const [losses, setLosses] = useState<{ step: number; loss: number }[]>([])
+  const [evals, setEvals] = useState<{ step: number; cer: number; wer: number; n: number }[]>([])
+  const [lastEval, setLastEval] = useState<any>(null)
+  const [evalEvery, setEvalEvery] = useState(0)
+  const [evalClips, setEvalClips] = useState(8)
   const [runId, setRunId] = useState('')
   const [error, setError] = useState('')
   const [viewing, setViewing] = useState<RunSummary | null>(null)
@@ -53,6 +57,8 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
     setError('')
     setBusy(true)
     setLosses([])
+    setEvals([])
+    setLastEval(null)
     setLive(null)
     setRunId('')
     setViewing(null)
@@ -62,7 +68,8 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
     try {
       await api.trainStream(
         { dataset_id: datasetId, model, method, max_steps: maxSteps, batch_size: batch, grad_accum: accum,
-          learning_rate: lr, warmup_steps: warmup, name, fp16: hw?.device === 'cuda' },
+          learning_rate: lr, warmup_steps: warmup, name, fp16: hw?.device === 'cuda',
+          eval_steps: evalEvery, eval_clips: evalClips },
         (ev) => {
           if (ev.type === 'run') setRunId(ev.run.id)
           else if (ev.type === 'status') setStatus(ev.message)
@@ -184,6 +191,10 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
             <input type="number" step={1e-5} value={lr} onChange={(e) => setLr(+e.target.value)} style={{ width: 110 }} />
             <label>warmup</label>
             <input type="number" min={0} value={warmup} onChange={(e) => setWarmup(+e.target.value)} style={{ width: 80 }} />
+            <label title="Transcribe held-out clips every N steps and score them. 0 = automatic (about six checks per run).">check every</label>
+            <input type="number" min={0} value={evalEvery} onChange={(e) => setEvalEvery(+e.target.value)} style={{ width: 80 }} />
+            <label title="How many held-out clips each check transcribes. More is a steadier number but slower.">clips</label>
+            <input type="number" min={1} max={64} value={evalClips} onChange={(e) => setEvalClips(+e.target.value)} style={{ width: 70 }} />
           </div>
           <div className="row">
             <label>run name</label>
@@ -233,6 +244,13 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
                   {live?.eta != null && <span>ETA <b>{live.eta}s</b></span>}
                   {live?.ram_mb != null && <span>RAM <b>{(live.ram_mb / 1024).toFixed(2)} GB</b></span>}
                   {live?.vram_mb != null && <span>VRAM <b>{(live.vram_mb / 1024).toFixed(2)} GB</b></span>}
+                  {lastEval && (
+                    <span title={`scored on ${lastEval.n} held-out clips at step ${lastEval.step}`}>
+                      held-out CER <b style={{ color: evals.length > 1 && lastEval.cer <= evals[0].cer ? 'var(--ok)' : undefined }}>
+                        {(lastEval.cer * 100).toFixed(1)}%
+                      </b> · WER <b>{(lastEval.wer * 100).toFixed(1)}%</b>
+                    </span>
+                  )}
                 </div>
                 <div className="progress">
                   <div style={{ width: live?.max_steps ? `${((live.step ?? 0) / live.max_steps) * 100}%` : '0%' }} />
@@ -252,6 +270,25 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
             <div style={{ marginTop: 10 }}>
               <LossChart points={chartPoints} />
             </div>
+            {(evals.length > 0 || (viewing?.evals?.length ?? 0) > 0) && (
+              <div style={{ marginTop: 14 }}>
+                <LossChart
+                  points={(viewing?.evals ?? evals).map((e) => ({ step: e.step, loss: e.cer * 100 }))}
+                  title="Held-out character error rate (%) — lower is better"
+                />
+              </div>
+            )}
+            {lastEval?.sample && (
+              <details style={{ marginTop: 8 }}>
+                <summary>Latest held-out example (step {lastEval.step})</summary>
+                <div className="clip">
+                  <div className="small">reference</div>
+                  <div className="my">{lastEval.sample.reference}</div>
+                  <div className="small" style={{ marginTop: 6 }}>model output</div>
+                  <div className="my">{lastEval.sample.hypothesis || <span className="small">(empty)</span>}</div>
+                </div>
+              </details>
+            )}
             {shown && !viewing && runId && <div className="small">Run id {runId}. It appears in Evaluate as a fine-tuned target once finished.</div>}
           </section>
         )}

@@ -35,6 +35,10 @@ model* to *measured improvement* short enough to actually run.
   size and how many steps make one epoch over your data.
 - Live progress: a loss curve, step counter, elapsed time, ETA, and RAM/VRAM. Stop cleanly after the
   current step, or abort.
+- **Held-out metrics while it trains.** Every few steps the run transcribes clips it has never seen and
+  scores them, so you watch character and word error rate move rather than guessing from the loss. It
+  gets its own chart, and the latest reference and model output are shown side by side. The interval is
+  automatic (about six checks per run) or you can set it; each check costs a few seconds per clip.
 - Every run is saved with its loss history and checkpoint, reopenable and deletable.
 
 **3 · Evaluate**

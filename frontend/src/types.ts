@@ -95,6 +95,7 @@ export interface RunSummary {
   clips: number
   device: string
   losses: { step: number; loss: number }[]
+  evals?: { step: number; cer: number; wer: number; n: number }[]
   config: Record<string, unknown>
   train_runtime?: number
   train_loss?: number

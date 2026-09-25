@@ -216,6 +216,8 @@ class TrainRequest(BaseModel):
     grad_accum: int = Field(default=4, ge=1, le=64)
     learning_rate: float = Field(default=1e-5, gt=0, le=1e-2)
     warmup_steps: int = Field(default=10, ge=0, le=5000)
+    eval_steps: int = Field(default=0, ge=0, le=10000)
+    eval_clips: int = Field(default=8, ge=1, le=64)
     fp16: bool = True
     freeze_encoder: bool = False
     lora_r: int = Field(default=16, ge=1, le=256)

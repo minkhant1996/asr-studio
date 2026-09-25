@@ -92,7 +92,8 @@ class TrainConfig:
     grad_accum: int = 4
     learning_rate: float = 1e-5
     warmup_steps: int = 10
-    eval_steps: int = 0            # 0 = only at the end
+    eval_steps: int = 0            # run a held-out CER/WER check every N steps (0 = off)
+    eval_clips: int = 8            # how many held-out clips each check transcribes
     save_steps: int = 0
     fp16: bool = True
     freeze_encoder: bool = False
@@ -147,6 +148,37 @@ class _Collator:
         batch["labels"] = labels
         _ = torch
         return batch
+
+
+def _quick_eval(model, processor, rows, language: str, max_new_tokens: int = 220) -> dict[str, Any]:
+    """Transcribe a few held-out clips and score them. Runs inside the training thread."""
+    import torch
+
+    from .evaluation import metrics
+
+    fe, tok = processor.feature_extractor, processor.tokenizer
+    was_training = model.training
+    model.eval()
+    refs, hyps = [], []
+    try:
+        for row in rows:
+            arr = prepare.to_array(row)
+            feats = fe(arr, sampling_rate=prepare.TARGET_SR, return_tensors="pt").input_features.to(model.device)
+            if next(model.parameters()).dtype == torch.float16:
+                feats = feats.half()
+            with torch.no_grad():
+                try:
+                    ids = model.generate(feats, max_new_tokens=max_new_tokens, language=language, task="transcribe")
+                except Exception:
+                    ids = model.generate(feats, max_new_tokens=max_new_tokens)
+            hyps.append(tok.batch_decode(ids, skip_special_tokens=True)[0].strip())
+            refs.append(row["text"])
+    finally:
+        if was_training:
+            model.train()
+    m = metrics(refs, hyps)
+    return {"cer": m["cer"], "wer": m["wer"], "n": m["n"],
+            "sample": {"reference": refs[0] if refs else "", "hypothesis": hyps[0] if hyps else ""}}
 
 
 def _build_processor(path: str, language: str, task: str):
@@ -280,6 +312,11 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
         )
 
         t0 = time.perf_counter()
+        eval_rows = [dsd["test"][i] for i in range(min(cfg.eval_clips, len(dsd["test"])))] if len(dsd["test"]) else []
+        eval_every = cfg.eval_steps if cfg.eval_steps else (0 if max_steps < 20 else max(10, max_steps // 6))
+        if eval_rows and eval_every:
+            q.put({"type": "status", "message": f"held-out check every {eval_every} steps on {len(eval_rows)} clips "
+                                                "(character error rate is the one to watch for Burmese)"})
 
         class _Cb(TrainerCallback):
             def on_log(self, a, state, control, logs=None, **kw):
@@ -297,6 +334,14 @@ def _train_sync(cfg: TrainConfig, run_id: str, q: "queue.Queue[dict[str, Any]]",
                        "vram_mb": round(mem["vram_mb"], 1) if mem["vram_mb"] is not None else None})
 
             def on_step_end(self, a, state, control, **kw):
+                step = int(state.global_step or 0)
+                if eval_rows and eval_every and step > 0 and (step % eval_every == 0 or step == max_steps):
+                    try:
+                        e0 = time.perf_counter()
+                        r = _quick_eval(model, processor, eval_rows, cfg.language)
+                        q.put({"type": "eval", "step": step, **r, "seconds": round(time.perf_counter() - e0, 1)})
+                    except Exception as ex:
+                        q.put({"type": "status", "message": f"held-out check failed at step {step}: {ex}"})
                 if stop.is_set():
                     control.should_training_stop = True
                 elif guards.critical():
@@ -332,7 +377,7 @@ async def train(cfg: TrainConfig) -> AsyncIterator[dict[str, Any]]:
     run: dict[str, Any] = {
         "id": run_id, "created": time.time(), "status": "running", "name": cfg.name or f"{spec['label']} · {ds_manifest['name']}",
         "model": cfg.model, "model_label": spec["label"], "dataset_id": cfg.dataset_id, "dataset_name": ds_manifest["name"],
-        "clips": ds_manifest["clips"], "config": cfg.__dict__, "device": sysinfo.device(), "losses": [],
+        "clips": ds_manifest["clips"], "config": cfg.__dict__, "device": sysinfo.device(), "losses": [], "evals": [],
     }
     save_run(run)
     yield {"type": "run", "run": run}
@@ -354,6 +399,9 @@ async def train(cfg: TrainConfig) -> AsyncIterator[dict[str, Any]]:
             ev["run_id"] = run_id
             if ev["type"] == "step" and ev.get("loss") is not None:
                 run["losses"].append({"step": ev["step"], "loss": ev["loss"]})
+            if ev["type"] == "eval":
+                run["evals"].append({k: ev[k] for k in ("step", "cer", "wer", "n")})
+                save_run(run)
             if ev["type"] in ("done", "error"):
                 run["status"] = "done" if ev["type"] == "done" else "error"
                 run["finished"] = time.time()
