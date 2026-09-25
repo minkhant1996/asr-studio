@@ -21,10 +21,11 @@ def resolve_target(target: dict[str, Any]) -> dict[str, Any]:
         base = models_catalog.resolve(run["model"])
         is_adapter = (model_dir / "adapter_config.json").exists()
         return {"path": str(model_dir), "label": f"{run['name']} (fine-tuned)", "base_path": base["path"],
-                "adapter": is_adapter, "language": run.get("config", {}).get("language", "burmese"), "run_id": run["id"]}
+                "adapter": is_adapter, "language": run.get("config", {}).get("language", "burmese"),
+                "run_id": run["id"], "family": base.get("family", "whisper")}
     spec = models_catalog.resolve(target.get("model") or models_catalog.DEFAULT_MODEL)
     return {"path": spec["path"], "label": spec["label"], "base_path": spec["path"], "adapter": False,
-            "language": target.get("language", "burmese"), "family": spec.get("family")}
+            "language": target.get("language", "burmese"), "family": spec.get("family", "whisper")}
 
 
 @lru_cache(maxsize=2)
@@ -34,11 +35,17 @@ def _load(path: str, base_path: str, adapter: bool, language: str, family: str =
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
     if family == "nemotron_rnnt":
-        # RNN-Transducer: no seq2seq class, but the ASR pipeline handles its decoding.
-        from transformers import pipeline
+        # RNN-Transducer: no seq2seq class, but the ASR pipeline handles its decoding. A fine-tuned
+        # copy carries a grown vocabulary, so model and processor are both loaded from its own folder.
+        from transformers import AutoModel, AutoProcessor, pipeline
 
         dev = 0 if sysinfo.device() == "cuda" else -1
-        pipe = pipeline("automatic-speech-recognition", model=path, device=dev, token=get_hf_token() or None)
+        tok = get_hf_token() or None
+        model = AutoModel.from_pretrained(path, token=tok)
+        processor = AutoProcessor.from_pretrained(path, token=tok)
+        pipe = pipeline("automatic-speech-recognition", model=model,
+                        feature_extractor=getattr(processor, "feature_extractor", None),
+                        tokenizer=getattr(processor, "tokenizer", None), device=dev)
         return pipe, "pipeline", sysinfo.device()
 
     device = sysinfo.device()
@@ -82,7 +89,7 @@ def load_target(target: dict[str, Any]):
     device = sysinfo.device()
     if _load.cache_info().currsize == 0:   # nothing cached yet: this load really allocates
         guards.check(guards.model_need_mb(params, "inference", device), f"{t['label']} (transcription)", device)
-    family = spec.get("family", "whisper") if spec else "whisper"
+    family = t.get("family") or (spec.get("family", "whisper") if spec else "whisper")
     with _load_lock:
         runner, kind, dev = _load(t["path"], t["base_path"], t["adapter"], t.get("language") or "burmese", family)
     return (runner, kind, dev), t

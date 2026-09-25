@@ -95,9 +95,12 @@ Caveats found by testing each one, rather than trusting the cards:
     embedding and joint head to match, preserving the original rows. On the 400-clip set that is 58
     characters, after which Burmese round-trips exactly.
 
-  It trains the decoder and joint network with the encoder frozen: 23.8M of 638M parameters. Because it
-  starts from no Burmese at all, expect it to need far more data than adapting Whisper, whose Burmese is
-  merely bad rather than absent.
+  It trains the decoder and joint network with the encoder frozen: 23.8M of 638M parameters, and the
+  fine-tuned copy loads back for transcription with its grown vocabulary. Because it starts from no
+  Burmese at all — the added characters begin as random embeddings, and its encoder has never heard the
+  language — expect it to need far more data than adapting Whisper, whose Burmese is merely bad rather
+  than absent. Its advantage is elsewhere: RNN-Transducers decode in a streaming fashion, so this is the
+  architecture to pick if you need low-latency live transcription rather than the best error rate per clip.
 - **Qwen3-ASR** ships weight names (`thinker.*`) that transformers 5.x does not map, so loading it that
   way silently produces a randomly initialised model. It needs Qwen's own `qwen-asr` package — and
   installing that downgrades transformers to 4.x, which removes support for Nemotron and VibeVoice.
