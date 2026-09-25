@@ -46,8 +46,9 @@ model* to *measured improvement* short enough to actually run.
 - Saved to a history you can reopen.
 
 **4 · Transcribe**
-- Upload any audio file and transcribe it with a base model or one of your fine-tuned runs. Long files
-  are chunked at 30 seconds. Shows duration, wall time and real-time factor.
+- Drag an audio file onto the drop zone, or click to browse, and transcribe it with a base model or one
+  of your fine-tuned runs. Long files are chunked at 30 seconds. Shows duration, wall time and real-time
+  factor, with the audio playable next to the transcript.
 
 ## Datasets
 

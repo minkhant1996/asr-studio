@@ -216,3 +216,25 @@ a.chip { text-decoration: none; display: inline-block; }
 
 /* the suggestion row in chat: full-width readable pills */
 .suggest .chip { text-align: left; max-width: 100%; white-space: normal; }
+
+/* ---- drag-and-drop audio zone ---- */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 26px 18px;
+  text-align: center;
+  cursor: pointer;
+  background: #12151b;
+  transition: border-color .15s, background .15s, transform .08s;
+  user-select: none;
+}
+.dropzone:hover { border-color: var(--accent); background: #151a24; }
+.dropzone:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dropzone.over {
+  border-color: var(--accent);
+  background: rgba(108, 140, 255, .12);
+  transform: scale(1.01);
+}
+.dropzone.has-file { border-style: solid; border-color: #3ccf7a55; background: rgba(60, 207, 122, .06); }
+.dropzone b { display: block; font-size: 14px; margin-bottom: 3px; }
+.dz-icon { font-size: 26px; line-height: 1; margin-bottom: 8px; opacity: .85; }
