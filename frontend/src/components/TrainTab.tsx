@@ -210,10 +210,13 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
             <input type="number" step={1e-5} value={lr} onChange={(e) => setLr(+e.target.value)} style={{ width: 110 }} />
             <label>warmup</label>
             <input type="number" min={0} value={warmup} onChange={(e) => setWarmup(+e.target.value)} style={{ width: 80 }} />
-            <label title="Transcribe held-out clips every N steps and score them. 0 = automatic (about six checks per run).">check every</label>
+            <label title="Score the model on held-out clips every N steps. 0 = automatic, about six checks across the run. This does not affect what the model trains on.">
+              validate every
+            </label>
             <input type="number" min={0} value={evalEvery} onChange={(e) => setEvalEvery(+e.target.value)} style={{ width: 80 }} />
-            <label title="How many held-out clips each check transcribes. More is a steadier number but slower.">clips</label>
-            <input type="number" min={1} max={64} value={evalClips} onChange={(e) => setEvalClips(+e.target.value)} style={{ width: 70 }} />
+            <span className="small">steps, on</span>
+            <input type="number" min={1} max={64} value={evalClips} onChange={(e) => setEvalClips(+e.target.value)} style={{ width: 70 }} title="How many held-out clips each validation check transcribes. More gives a steadier number but each check takes longer. Training always uses the whole training split." />
+            <span className="small">held-out clips {ds ? `(of ${ds.test} kept aside)` : ''}</span>
             <label title="Stop when the held-out error rate stops improving, and export the best checkpoint rather than the last.">
               <input type="checkbox" checked={earlyStop} onChange={(e) => setEarlyStop(e.target.checked)} style={{ width: 'auto', marginRight: 6 }} />
               early stop
@@ -230,7 +233,7 @@ export default function TrainTab({ prepared, runs, reloadRuns }: { prepared: Man
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="optional" style={{ width: 240 }} />
             <span className="small">
               effective batch {batch * accum}
-              {ds ? ` · ${stepsPerEpoch} steps = 1 epoch over ${ds.train} clips` : ''}
+              {ds ? ` · trains on all ${ds.train.toLocaleString()} clips · ${stepsPerEpoch.toLocaleString()} steps = 1 epoch` : ''}
             </span>
           </div>
           <div className="row">
