@@ -11,6 +11,8 @@ cd backend
 if not exist .venv (python -m venv .venv || exit /b 1)
 .venv\Scripts\python.exe -m pip install --upgrade pip >nul
 .venv\Scripts\python.exe -m pip install -r requirements.txt || exit /b 1
+REM VoxCPM2 (Speak tab) without its dependencies: its metadata pins an older datasets and pulls in gradio, funasr and modelscope
+.venv\Scripts\python.exe -m pip install --no-deps "voxcpm>=2.0.3" || exit /b 1
 if exist .env.example if not exist .env copy .env.example .env >nul
 if not exist data mkdir data
 cd ..

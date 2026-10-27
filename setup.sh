@@ -10,13 +10,18 @@ command -v ffmpeg >/dev/null 2>&1 || echo "Note: ffmpeg not found. Most audio de
 
 echo "==> Backend: virtual environment + dependencies (torch is large, this takes a few minutes)"
 cd backend
+# VoxCPM2 (Speak tab) goes in without its dependencies: its metadata pins datasets<4 and pulls in
+# gradio, funasr and modelscope, none of which synthesis needs.
+VOXCPM="voxcpm>=2.0.3"
 if command -v uv >/dev/null 2>&1; then
   [ -d .venv ] || uv venv .venv
   uv pip install --python .venv/bin/python -r requirements.txt
+  uv pip install --python .venv/bin/python --no-deps "$VOXCPM"
 else
   [ -d .venv ] || python3 -m venv .venv
   .venv/bin/pip install --upgrade pip >/dev/null
   .venv/bin/pip install -r requirements.txt
+  .venv/bin/pip install --no-deps "$VOXCPM"
 fi
 [ -f .env.example ] && [ ! -f .env ] && cp .env.example .env && echo "    created backend/.env"
 mkdir -p data
@@ -27,4 +32,4 @@ cd frontend && npm install && cd ..
 
 echo
 echo "Setup complete. Start everything with:  ./start.sh"
-echo "Model weights download on first use (Whisper tiny ~150 MB, small ~1 GB, large-v3-turbo ~1.6 GB)."
+echo "Model weights download on first use (Whisper tiny ~150 MB, small ~1 GB, large-v3-turbo ~1.6 GB, VoxCPM2 ~4.7 GB)."

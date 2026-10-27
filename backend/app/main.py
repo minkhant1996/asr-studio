@@ -1,15 +1,16 @@
 import asyncio
 import io
 import json
+from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import datasets_catalog as dc
-from . import evaluation, guards, inference, knowledge, models_catalog, openrouter, prepare, secrets_store, sysinfo, training
+from . import evaluation, guards, inference, knowledge, models_catalog, openrouter, prepare, secrets_store, sysinfo, training, tts
 from .config import get_hf_token, settings
 
 app = FastAPI(title="ASR Studio API")
@@ -364,6 +365,63 @@ async def transcribe(file: UploadFile, target: str = "{}", language: str = "burm
             "model": info["label"], "device": info["device"], "filename": file.filename}
 
 
+# ------------------------------------------------------------------ speak
+@app.get("/api/tts")
+async def tts_status(model: str | None = None):
+    try:
+        return await asyncio.to_thread(tts.status, model)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/speak")
+async def speak(text: str = Form(...), voice: str = Form(""), prompt_text: str = Form(""),
+                cfg: float = Form(2.0), steps: int = Form(10), model: str = Form(tts.DEFAULT_MODEL),
+                reference: UploadFile | None = None):
+    """Synthesize speech, optionally in the voice of an uploaded reference clip."""
+    text = text.strip()
+    if not text:
+        raise HTTPException(400, "text is empty")
+    if len(text) > tts.MAX_TEXT:
+        raise HTTPException(400, f"text is longer than {tts.MAX_TEXT} characters")
+    if not 1.0 <= cfg <= 3.0 or not 4 <= steps <= 30:
+        raise HTTPException(400, "cfg must be 1-3 and steps 4-30")
+    try:
+        spec = tts.resolve(model)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    if spec.get("status") == "unsupported":
+        raise HTTPException(501, f"{spec['label']} cannot run in this backend. {spec['note']}")
+    if not tts.installed(spec["id"]):
+        raise HTTPException(501, f"{spec['label']} needs a package that is not installed. "
+                                 f"Run: {tts.install_hint(spec)}")
+
+    ref = None
+    if reference is not None:
+        raw = await reference.read(MAX_UPLOAD + 1)
+        if len(raw) > MAX_UPLOAD:
+            raise HTTPException(413, "reference clip larger than 200 MB")
+        import librosa
+
+        try:
+            ref, _ = await asyncio.to_thread(librosa.load, io.BytesIO(raw), sr=16000, mono=True,
+                                             duration=tts.MAX_REFERENCE_SECONDS)
+        except Exception as e:
+            raise HTTPException(400, f"could not decode reference audio: {e}")
+        if len(ref) < 16000:
+            raise HTTPException(400, "reference clip is shorter than one second")
+    try:
+        out = await tts.synthesize(text, voice=voice, reference=ref, prompt_text=prompt_text, cfg=cfg,
+                                   steps=steps, model_id=spec["id"])
+    except guards.NotEnoughMemory as e:
+        raise HTTPException(507, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"synthesis failed: {e}")
+    import base64
+
+    return {**{k: v for k, v in out.items() if k != "wav"}, "audio_b64": base64.b64encode(out["wav"]).decode()}
+
+
 # ------------------------------------------------------------------ learn
 class LearnRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
@@ -477,3 +535,13 @@ class PrefsUpdate(BaseModel):
 @app.put("/api/settings/prefs")
 async def set_prefs(body: PrefsUpdate):
     return {"ok": True, "prefs": secrets_store.set_prefs(**body.prefs)}
+
+
+# ------------------------------------------------------------------ built frontend
+# When frontend/dist exists (`npm run build`), serve it from here too, so the whole app is one origin on
+# one port. That is what serve.sh puts behind the tunnel. Mounted last: API routes above win.
+_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+if _DIST.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="frontend")

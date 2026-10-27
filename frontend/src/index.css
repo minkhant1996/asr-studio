@@ -17,7 +17,7 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
 header h1 { font-size: 22px; margin: 0; }
 header .status { color: var(--muted); font-size: 13px; }
-.tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
 .tabs button { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 8px 14px; border-radius: 8px; cursor: pointer; }
 .tabs button.active { color: var(--text); border-color: var(--accent); background: rgba(108,140,255,.12); }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }

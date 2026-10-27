@@ -161,4 +161,52 @@ export interface SystemInfo {
   note: string | null
 }
 
+export interface TtsModel {
+  id: string
+  path: string
+  label: string
+  params: string
+  engine: string
+  languages: number
+  burmese: boolean
+  sample_rate: number
+  license: string
+  note: string
+  url: string
+  /** false when the model has no voice-description mode */
+  design: boolean
+  /** false when the model cannot clone from a reference clip */
+  clone: boolean
+  /** false when the guidance and step controls do not apply */
+  advanced: boolean
+  weights_gb: number
+  status: string
+  installed: boolean
+  install_hint: string
+  loaded: boolean
+  device: string
+  need_mb: number
+  free_mb: number | null
+  fits: boolean
+  max_text: number
+  max_reference_seconds: number
+}
+
+export interface TtsStatus extends TtsModel {
+  models: TtsModel[]
+  default: string
+}
+
+export interface SpeakResult {
+  audio_b64: string
+  sampling_rate: number
+  duration: number
+  ms: number
+  rtf: number | null
+  mode: 'default' | 'design' | 'clone' | 'clone+transcript'
+  model: string
+  model_id: string
+  device: string
+}
+
 export type Target = { kind: 'base'; model: string } | { kind: 'run'; run_id: string }

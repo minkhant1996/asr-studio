@@ -1,4 +1,4 @@
-import type { DatasetSourceInfo, DatasetSpec, EvalRecord, Manifest, ModelSpec, PreviewResult, RunSummary, Source, SystemInfo, Target } from './types'
+import type { DatasetSourceInfo, DatasetSpec, EvalRecord, Manifest, ModelSpec, PreviewResult, RunSummary, Source, SpeakResult, SystemInfo, Target, TtsStatus } from './types'
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, {
@@ -96,6 +96,19 @@ export const api = {
       device: string
       filename: string
     }
+  },
+
+  tts: (model?: string) => req<TtsStatus>(model ? `/tts?model=${encodeURIComponent(model)}` : '/tts'),
+  speak: (opts: { text: string; model?: string; voice?: string; reference?: File | null; promptText?: string; cfg?: number; steps?: number }) => {
+    const fd = new FormData()
+    fd.append('text', opts.text)
+    fd.append('model', opts.model ?? '')
+    fd.append('voice', opts.voice ?? '')
+    fd.append('prompt_text', opts.promptText ?? '')
+    fd.append('cfg', String(opts.cfg ?? 2))
+    fd.append('steps', String(opts.steps ?? 10))
+    if (opts.reference) fd.append('reference', opts.reference)
+    return req<SpeakResult>('/speak', { method: 'POST', body: fd })
   },
 
   settings: () => req<{

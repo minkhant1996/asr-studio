@@ -1,6 +1,55 @@
-frontend/node_modules/
-frontend/dist/
-backend/.venv/
-backend/data/
+# Secrets and local config. Templates (.env.example) stay tracked.
+.env
+.env.*
+!.env.example
 backend/.env
+
+# Python
+backend/.venv/
+.venv/
+venv/
 __pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Vite
+frontend/node_modules/
+node_modules/
+frontend/dist/
+dist/
+*.local
+
+# App state: prepared clips, caches, training runs, evaluations (tens of GB)
+backend/data/
+
+# Hosting runtime: pids, logs and the generated ngrok config from ./serve.sh
+.run/
+*.log
+*.pid
+
+# Model weights and audio should never be committed
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# Editors and OS
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/settings.local.json

@@ -14,7 +14,7 @@ speech as Chinese characters and Whisper small emits Khmer and IPA fragments: ro
 error rate. The data to fix that is public, so this app makes the loop from *dataset* to *fine-tuned
 model* to *measured improvement* short enough to actually run.
 
-## The four tabs
+## The tabs
 
 **1 · Data**
 - Seven curated Burmese datasets, each previewable with a playable clip and its transcript before you
@@ -63,6 +63,32 @@ model* to *measured improvement* short enough to actually run.
 - Drag an audio file onto the drop zone, or click to browse, and transcribe it with a base model or one
   of your fine-tuned runs. Long files are chunked at 30 seconds. Shows duration, wall time and real-time
   factor, with the audio playable next to the transcript.
+
+**5 · Speak**
+- The other direction: type text and hear it. Pick the model at the top of the tab; the controls below
+  follow what that model can actually do.
+
+| Model | Languages | Voice from a description | Clone from a clip | Output | License |
+|---|---|---|---|---|---|
+| [VoxCPM2](https://huggingface.co/openbmb/VoxCPM2) 2B | 30, **Burmese** and Thai among them | yes | yes | 48 kHz | Apache-2.0 |
+| [VibeVoice 1.5B](https://huggingface.co/vibevoice/VibeVoice-1.5B-hf) | English, Chinese | no | yes | 24 kHz | MIT |
+| [VibeVoice Realtime 0.5B](https://huggingface.co/microsoft/VibeVoice-Realtime-0.5B) | English | no | no | 24 kHz | MIT |
+
+- **VoxCPM2** is the only one that reads Burmese, so it stays the default. Three ways to choose its voice:
+  leave it to the model, describe one in words ("a middle-aged man, calm news-reader voice"), or upload a
+  few seconds of a speaker to clone. Adding the clip's exact transcript clones more closely.
+- **VibeVoice 1.5B** is Microsoft's long-form conversational TTS in its transformers-native conversion, so
+  it needs no extra package beyond `diffusers` for the noise scheduler. It cannot read Burmese; it is here
+  as an English voice and a second opinion on cloning. It has no voice-description mode.
+- **VibeVoice Realtime 0.5B** is listed but **not loadable here**, and the tab says so rather than failing
+  at generation time. Its checkpoint declares the `vibevoice_streaming` architecture, which transformers
+  does not implement, and Microsoft's standalone `vibevoice` package that does implement it pins
+  `transformers<5` and registers config classes that collide with the VibeVoice ones transformers 5.x
+  already owns. It needs its own environment. It also cannot clone: its speakers ship as fixed embeddings.
+- Clone only voices you have permission to use, and label the result as AI-generated.
+- These are TTS models, so they cannot transcribe and are deliberately absent from the base-model lists in
+  the other tabs. One is held in memory at a time: picking another unloads the first. Measured on CPU:
+  roughly 5 s of work per second of speech. Both model cards quote faster than real time on an RTX 4090.
 
 ## Datasets
 
@@ -120,7 +146,15 @@ Caveats found by testing each one, rather than trusting the cards:
   installing that downgrades transformers to 4.x, which removes support for Nemotron and VibeVoice.
   `requirements.txt` therefore pins `transformers>=5.17`, and the app refuses Qwen3-ASR with an
   explanation rather than returning nonsense. Run it in a separate environment if you need it.
-- **VibeVoice** needs ~19 GB of VRAM just to load, so it could not be verified here.
+- **VibeVoice ASR Streaming 7B** needs ~19 GB of VRAM just to load, so it could not be verified here. The
+  VibeVoice *speech* models are a separate matter, covered under the Speak tab above: 1.5B runs natively on
+  transformers 5.x, while Realtime 0.5B cannot share an environment with it.
+- **VoxCPM2** (the Speak tab) is installed with `pip install --no-deps voxcpm`, which `setup.sh` does for
+  you. Its package metadata pins `datasets<4` and pulls in gradio, funasr and modelscope; a plain install
+  downgrades the `datasets` library the Data tab depends on. Synthesis needs only `einops` on top of what is
+  already installed. Without modelscope there is no reference-clip denoiser, so give it clean clips.
+  Checked by transcribing its output back: English and Thai round-trip word for word through Whisper;
+  Burmese is recognised about as well as real Burmese speech is, which with today's models is not well.
 
 ## Memory safety
 
@@ -155,7 +189,7 @@ On a 64 GB machine with ~34 GB free, this is what the guards report:
 - Works on NVIDIA (CUDA), Apple Silicon (Metal) and CPU-only machines. The header and Settings tab
   show which device is in use and live RAM/VRAM.
 - Disk: model weights land in `~/.cache/huggingface` (Whisper tiny ~150 MB, small ~1 GB,
-  large-v3-turbo ~1.6 GB). Prepared clips are stored as 16 kHz PCM16, about 32 KB per second of audio.
+  large-v3-turbo ~1.6 GB, VoxCPM2 ~4.7 GB). Prepared clips are stored as 16 kHz PCM16, about 32 KB per second of audio.
 
 ## Quick start
 
@@ -164,6 +198,19 @@ On a 64 GB machine with ~34 GB free, this is what the guards report:
 ./start.sh     # backend on :8767, frontend on :5175
 ```
 Windows: `setup.bat` then `start.bat`. Then open http://localhost:5175.
+
+### Hosting it
+
+`./serve.sh` runs the app as a single process for others to use: it builds the frontend, serves it and the
+API from one port, and opens an ngrok tunnel. Copy `.env.example` to `.env` and set `DOMAIN` (a reserved
+ngrok domain, or empty for a random URL) and `BASIC_AUTH_USER`/`BASIC_AUTH_PASS`. Set the password: the app
+has no login of its own, and anyone who reaches it can start training jobs, fill the disk and change the
+stored keys. `TUNNEL=0` serves locally only.
+
+```bash
+./serve.sh start      # build, start, print the public URL
+./serve.sh status     # ./serve.sh logs · ./serve.sh stop
+```
 
 ### Docker
 
@@ -197,6 +244,7 @@ Interactive docs at http://127.0.0.1:8767/docs.
 | Training | `POST /api/train/stream` (NDJSON), `GET /api/runs`, `GET/DELETE /api/runs/{id}`, `POST /api/runs/{id}/stop` |
 | Evaluation | `POST /api/evaluate/stream` (NDJSON), `GET /api/evals`, `GET/DELETE /api/evals/{id}` |
 | Transcribe | `POST /api/transcribe` (multipart) |
+| Speak | `GET /api/tts` (optional `?model=`; returns the chosen model plus the catalogue), `POST /api/speak` (multipart: `text`, optional `model`, `voice`, `reference`, `prompt_text`, `cfg`, `steps`) |
 | Settings | `GET /api/settings`, `PUT/DELETE /api/settings/hf` |
 
 ## Data & privacy

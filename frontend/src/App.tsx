@@ -6,10 +6,11 @@ import SettingsTab from './components/SettingsTab'
 import SystemStats from './components/SystemStats'
 import TrainTab from './components/TrainTab'
 import TranscribeTab from './components/TranscribeTab'
+import SpeakTab from './components/SpeakTab'
 import LearnTab from './components/LearnTab'
 import type { EvalRecord, Manifest, RunSummary } from './types'
 
-type Tab = 'data' | 'train' | 'evaluate' | 'transcribe' | 'learn' | 'settings'
+type Tab = 'data' | 'train' | 'evaluate' | 'transcribe' | 'speak' | 'learn' | 'settings'
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('data')
@@ -43,6 +44,7 @@ export default function App() {
     { id: 'train', label: '2 · Fine-tune' },
     { id: 'evaluate', label: '3 · Evaluate' },
     { id: 'transcribe', label: '4 · Transcribe' },
+    { id: 'speak', label: '5 · Speak' },
     { id: 'learn', label: 'Learn' },
     { id: 'settings', label: 'Settings' },
   ]
@@ -67,6 +69,7 @@ export default function App() {
       {tab === 'train' && <TrainTab prepared={prepared} runs={runs} reloadRuns={loadRuns} />}
       {tab === 'evaluate' && <EvaluateTab prepared={prepared} runs={runs} evals={evals} reloadEvals={loadEvals} />}
       {tab === 'transcribe' && <TranscribeTab runs={runs} />}
+      {tab === 'speak' && <SpeakTab />}
       {tab === 'learn' && <LearnTab aiEnabled={!!health?.openrouter_configured} textModel={health?.openrouter_model ?? ''} />}
       {tab === 'settings' && <SettingsTab onChange={loadHealth} />}
     </div>

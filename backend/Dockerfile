@@ -6,6 +6,8 @@ COPY requirements.txt .
 # CPU-only torch keeps the image at a few GB; swap the index URL for a CUDA build to train on a GPU.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install -r requirements.txt
+# VoxCPM2 (Speak tab) without its dependencies: its metadata pins datasets<4 and pulls in gradio, funasr and modelscope
+RUN pip install --no-deps "voxcpm>=2.0.3"
 COPY . .
 EXPOSE 8767
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8767"]

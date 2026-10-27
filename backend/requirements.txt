@@ -16,3 +16,5 @@ peft
 evaluate
 cryptography
 torchaudio
+einops                      # for VoxCPM2 (Speak tab); voxcpm itself is installed with --no-deps by setup, its pins would downgrade datasets
+diffusers                   # noise scheduler for VibeVoice's diffusion head (Speak tab)
